@@ -1,0 +1,1649 @@
+---
+title: "Full Conditional Distributions for the Exponential Kriging Model"
+author: "Bayesian Spatial Analysis"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    css: styles.css
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Introduction
+
+This document provides a **detailed, step-by-step derivation** of the full conditional distributions for all parameters in the **exponential kriging model** from equations (6.1) and (6.3) of *Hierarchical Modeling and Analysis for Spatial Data* (3rd Edition).
+
+**Special focus** is given to deriving:
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\boldsymbol{\beta})$$
+
+
+
+# Part 1: Understanding Hierarchical Models
+
+## 1.1 What is a Hierarchical Model?
+
+A **hierarchical model** (also called a **multi-level model**) organizes parameters into **levels** or **stages**. Each level depends on parameters from the level above it:
+
+```
+Level 0: Data (observed)
+    ↑ depends on
+Level 1: Latent Process (unobserved)
+    ↑ depends on
+Level 2: Parameters
+    ↑ depends on
+Level 3: Hyperparameters (fixed or given priors)
+```
+
+---
+
+## 1.2 Our Exponential Kriging Model as a Hierarchy
+
+### Level 1: Data Model
+
+$$\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2 \sim N(\mathbf{X}\boldsymbol{\beta} + \mathbf{W}, \tau^2 \mathbf{I})$$
+
+- $\mathbf{Y}$ depends on $\boldsymbol{\beta}$, $\mathbf{W}$, and $\tau^2$
+- $\boldsymbol{\beta}$ = regression coefficients
+- $\mathbf{W}$ = spatial random effects
+- $\tau^2$ = measurement error variance (nugget)
+
+### Level 2: Process Model
+
+$$\mathbf{W} \mid \sigma^2, \phi \sim N(\mathbf{0}, \sigma^2 H(\phi))$$
+
+- $\mathbf{W}$ depends on $\sigma^2$ and $\phi$
+- $\sigma^2$ = spatial variance (partial sill)
+- $\phi$ = spatial decay parameter
+- $H(\phi)$ = correlation matrix with entries $\exp(-\phi \|\mathbf{s}_i - \mathbf{s}_j\|)$
+
+### Level 3: Priors
+
+$$\boldsymbol{\beta} \sim N(\boldsymbol{\mu}_\beta, \Sigma_\beta)$$
+
+$$\tau^2 \sim IG(a_\tau, b_\tau)$$
+
+$$\sigma^2 \sim IG(a_\sigma, b_\sigma)$$
+
+$$\phi \sim \text{Gamma}(a_\phi, b_\phi)$$
+
+---
+
+## 1.3 Visualizing the Dependencies
+
+```
+                    ┌─────────────────┐
+                    │   Hyperpriors   │
+                    │  (Fixed values) │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │     Priors      │
+                    │ β, τ², σ², φ    │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │  Process Model  │
+                    │   W | σ², φ     │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │   Data Model    │
+                    │  Y | β, W, τ²   │
+                    └─────────────────┘
+```
+
+**Key Insight:** Each level depends **only** on the level directly above it.
+
+
+
+## 1.4 The Factorization Rule
+
+In a hierarchical model, the **joint distribution** equals the **product** of each variable's **conditional distribution** given its parents:
+
+$$\boxed{p(\text{all variables}) = \prod_{\text{each variable } V} p(V \mid \text{parents of } V)}$$
+
+### Applying to Our Model:
+
+| Variable | Depends On (Parents) | Conditional Distribution |
+|:----------|:---------------------|:--------------------------|
+| $\mathbf{Y}$ | $\boldsymbol{\beta}, \mathbf{W}, \tau^2$ | $p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2)$ |
+| $\mathbf{W}$ | $\sigma^2, \phi$ | $p(\mathbf{W} \mid \sigma^2, \phi)$ |
+| $\boldsymbol{\beta}$ | None (prior) | $p(\boldsymbol{\beta})$ |
+| $\tau^2$ | None (prior) | $p(\tau^2)$ |
+| $\sigma^2$ | None (prior) | $p(\sigma^2)$ |
+| $\phi$ | None (prior) | $p(\phi)$ |
+
+### The Full Joint Distribution:
+
+$$\boxed{p(\mathbf{Y}, \mathbf{W}, \boldsymbol{\beta}, \tau^2, \sigma^2, \phi) = p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W} \mid \sigma^2, \phi) \times p(\boldsymbol{\beta}) \times p(\tau^2) \times p(\sigma^2) \times p(\phi)}$$
+
+
+## 1.5 Deriving $p(\mathbf{Y}, \mathbf{W}, \tau^2, \sigma^2, \phi \mid \boldsymbol{\beta})$
+
+### Step 1: Start with the Full Joint
+
+$$p(\mathbf{Y}, \mathbf{W}, \boldsymbol{\beta}, \tau^2, \sigma^2, \phi) = p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W} \mid \sigma^2, \phi) \times p(\boldsymbol{\beta}) \times p(\tau^2) \times p(\sigma^2) \times p(\phi)$$
+
+### Step 2: Condition on $\boldsymbol{\beta}$
+
+When we condition on $\boldsymbol{\beta}$, we treat it as **fixed/known**. This means we divide by $p(\boldsymbol{\beta})$:
+
+$$p(\mathbf{Y}, \mathbf{W}, \tau^2, \sigma^2, \phi \mid \boldsymbol{\beta}) = \frac{p(\mathbf{Y}, \mathbf{W}, \boldsymbol{\beta}, \tau^2, \sigma^2, \phi)}{p(\boldsymbol{\beta})}$$
+
+### Step 3: Substitute and Cancel
+
+$$\boxed{p(\mathbf{Y}, \mathbf{W}, \tau^2, \sigma^2, \phi \mid \boldsymbol{\beta}) = p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W} \mid \sigma^2, \phi) \times p(\tau^2) \times p(\sigma^2) \times p(\phi)}$$
+
+---
+
+## 1.6 Why This Factorization Works
+
+### Reason 1: Conditional Independence
+
+Variables are **conditionally independent** given their parents:
+- $\mathbf{W}$ and $\boldsymbol{\beta}$ are independent given $\sigma^2, \phi$
+- $\tau^2$ and $\boldsymbol{\beta}$ are independent (separate priors)
+
+### Reason 2: The Chain Rule
+
+$$p(A, B, C) = p(A \mid B, C) \times p(B \mid C) \times p(C)$$
+
+### Reason 3: The Production Line Analogy
+
+1. Draw $\boldsymbol{\beta}$ from prior (conditioning on it = fixed)
+2. Draw $\tau^2$ from prior
+3. Draw $\sigma^2$ and $\phi$ from priors
+4. Draw $\mathbf{W}$ from $N(0, \sigma^2 H(\phi))$
+5. Draw $\mathbf{Y}$ from $N(\mathbf{X}\boldsymbol{\beta} + \mathbf{W}, \tau^2 \mathbf{I})$
+
+The probability of the sequence is the **product** of each step's probability.
+
+---
+
+## 1.7 Summary Table: Variables and Their Dependencies
+
+| Variable | Type | Depends On | Does NOT Depend On |
+|:----------|:------|:------------|:-------------------|
+| $\mathbf{Y}$ | Data | $\boldsymbol{\beta}, \mathbf{W}, \tau^2$ | $\sigma^2, \phi$ |
+| $\mathbf{W}$ | Latent | $\sigma^2, \phi$ | $\boldsymbol{\beta}, \tau^2$ |
+| $\boldsymbol{\beta}$ | Parameter | None (prior) | $\mathbf{W}, \tau^2, \sigma^2, \phi$ |
+| $\tau^2$ | Parameter | None (prior) | $\boldsymbol{\beta}, \mathbf{W}, \sigma^2, \phi$ |
+| $\sigma^2$ | Parameter | None (prior) | $\boldsymbol{\beta}, \mathbf{W}, \tau^2, \phi$ |
+| $\phi$ | Parameter | None (prior) | $\boldsymbol{\beta}, \mathbf{W}, \tau^2, \sigma^2$ |
+
+---
+
+# Part 2: Detailed Derivation of 
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\boldsymbol{\beta})$$
+
+## 2.1 Step 1: Start with the Definition of Conditional Probability
+
+For any two random variables/vectors $A$ and $B$:
+
+$$P(A \mid B) = \frac{P(A \cap B)}{P(B)}$$
+
+For continuous random variables with probability density functions:
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) = \frac{p(\boldsymbol{\beta}, \mathbf{Y}, \mathbf{W}, \tau^2)}{p(\mathbf{Y}, \mathbf{W}, \tau^2)}$$
+
+---
+
+## 2.2 Step 2: Write the Joint Distribution $p(\boldsymbol{\beta}, \mathbf{Y}, \mathbf{W}, \tau^2)$
+
+Using the **Chain Rule of Probability**:
+
+$$p(\boldsymbol{\beta}, \mathbf{Y}, \mathbf{W}, \tau^2) = p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\boldsymbol{\beta}, \mathbf{W}, \tau^2)$$
+
+Now apply the Chain Rule again to $p(\boldsymbol{\beta}, \mathbf{W}, \tau^2)$:
+
+$$p(\boldsymbol{\beta}, \mathbf{W}, \tau^2) = p(\mathbf{W}, \tau^2 \mid \boldsymbol{\beta}) \times p(\boldsymbol{\beta})$$
+
+Substituting back:
+
+$$p(\boldsymbol{\beta}, \mathbf{Y}, \mathbf{W}, \tau^2) = p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W}, \tau^2 \mid \boldsymbol{\beta}) \times p(\boldsymbol{\beta})$$
+
+
+
+## 2.3 Step 3: Substitute into Bayes' Theorem
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) = \frac{p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W}, \tau^2 \mid \boldsymbol{\beta}) \times p(\boldsymbol{\beta})}{p(\mathbf{Y}, \mathbf{W}, \tau^2)}$$
+
+
+
+## 2.4 Step 4: Identify the Denominator
+
+The denominator $p(\mathbf{Y}, \mathbf{W}, \tau^2)$ is the **marginal likelihood**:
+
+$$p(\mathbf{Y}, \mathbf{W}, \tau^2) = \int p(\mathbf{Y}, \mathbf{W}, \tau^2 \mid \boldsymbol{\beta}) \, p(\boldsymbol{\beta}) \, d\boldsymbol{\beta}$$
+
+**Important:** This integral is over $\boldsymbol{\beta}$. The result is a number that does **not** depend on $\boldsymbol{\beta}$.
+
+Therefore, for the purpose of finding the distribution of $\boldsymbol{\beta}$, the denominator is a **constant**.
+
+---
+
+## 2.5 Step 5: Simplify the Proportionality
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W}, \tau^2 \mid \boldsymbol{\beta}) \times p(\boldsymbol{\beta})$$
+
+
+
+## 2.6 Step 6: Analyze $p(\mathbf{W}, \tau^2 \mid \boldsymbol{\beta})$
+
+### Option A: Using Conditional Independence from the Hierarchical Model
+
+In our hierarchical model:
+
+$$\mathbf{W} \mid \sigma^2, \phi \sim N(\mathbf{0}, \sigma^2 H(\phi))$$
+
+$$\tau^2 \sim IG(a_\tau, b_\tau)$$
+
+**Key observation:** $\mathbf{W}$ and $\tau^2$ are **independent** of $\boldsymbol{\beta}$.
+
+Why?
+- $\mathbf{W}$ depends only on $\sigma^2$ and $\phi$ (not on $\boldsymbol{\beta}$)
+- $\tau^2$ has its own prior (not on $\boldsymbol{\beta}$)
+
+Therefore:
+
+$$p(\mathbf{W}, \tau^2 \mid \boldsymbol{\beta},\sigma^2,\phi) = p(\mathbf{W} \mid \sigma^2, \phi) \times p(\tau^2)$$
+The simplest derivation avoids this complication entirely:
+
+$$
+p(\beta \mid rest) \propto p(\mathbf{Y}, \mathbf{W},\beta, \sigma^2,\tau^2, \phi)\propto p(\mathbf{Y} \mid \beta, \mathbf{W},\tau^2)p(\beta)
+$$
+because all other factors are constant with respect to $\beta$.
+
+### Option B: Using the Full Joint Distribution
+
+Recall the full joint distribution from the hierarchical structure:
+
+$$p(\mathbf{Y}, \mathbf{W}, \boldsymbol{\beta}, \tau^2, \sigma^2, \phi) = p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W} \mid \sigma^2, \phi) \times p(\boldsymbol{\beta}) \times p(\tau^2) \times p(\sigma^2) \times p(\phi)$$
+
+Now, condition on $\boldsymbol{\beta}$ (treat it as known):
+
+$$p(\mathbf{Y}, \mathbf{W}, \tau^2, \sigma^2, \phi \mid \boldsymbol{\beta}) = \frac{p(\mathbf{Y}, \mathbf{W}, \boldsymbol{\beta}, \tau^2, \sigma^2, \phi)}{p(\boldsymbol{\beta})}$$
+
+$$= p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W} \mid \sigma^2, \phi) \times p(\tau^2) \times p(\sigma^2) \times p(\phi)$$
+
+Now integrate out $\sigma^2$ and $\phi$:
+
+$$p(\mathbf{Y}, \mathbf{W}, \tau^2 \mid \boldsymbol{\beta}) = \int\int p(\mathbf{Y}, \mathbf{W}, \tau^2, \sigma^2, \phi \mid \boldsymbol{\beta}) \, d\sigma^2 \, d\phi$$
+
+$$= p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\tau^2) \times \int p(\mathbf{W} \mid \sigma^2, \phi) \, p(\sigma^2) \, p(\phi) \, d\sigma^2 \, d\phi$$
+
+The integral is just a constant $C$ that does not depend on $\boldsymbol{\beta}$:
+
+$$p(\mathbf{Y}, \mathbf{W}, \tau^2 \mid \boldsymbol{\beta}) = C \times p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\tau^2)$$
+
+
+
+## 2.7 Step 7: Substitute Back
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times C \times p(\tau^2) \times p(\boldsymbol{\beta})$$
+
+Since $C$ and $p(\tau^2)$ are constants with respect to $\boldsymbol{\beta}$:
+
+$$\boxed{p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\boldsymbol{\beta})}$$
+
+
+## 2.8 Visual Summary of the Derivation
+
+```
+Step 1: Start with Bayes' Theorem
+         ↓
+p(β | Y, W, τ²) = p(Y | β, W, τ²) × p(β, W, τ²) / p(Y, W, τ²)
+         ↓
+Step 2: Apply Chain Rule
+         ↓
+p(β, W, τ²) = p(W, τ² | β) × p(β)
+         ↓
+Step 3: Substitute
+         ↓
+p(β | Y, W, τ²) = p(Y | β, W, τ²) × p(W, τ² | β) × p(β) / p(Y, W, τ²)
+         ↓
+Step 4: Identify constants
+         ↓
+p(W, τ² | β) = p(W | σ², φ) × p(τ²)   [from hierarchical model]
+p(Y, W, τ²) = constant (doesn't depend on β)
+         ↓
+Step 5: Drop constants
+         ↓
+p(β | Y, W, τ²) ∝ p(Y | β, W, τ²) × p(β)
+```
+
+---
+
+## 2.9 Intuitive Interpretation
+
+| Term | Meaning | Role |
+|:------|:---------|:------|
+| $p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2)$ | **Posterior** | What we know about $\boldsymbol{\beta}$ after seeing data |
+| $p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2)$ | **Likelihood** | How well $\boldsymbol{\beta}$ explains the data $\mathbf{Y}$ (given $\mathbf{W}$ and $\tau^2$) |
+| $p(\boldsymbol{\beta})$ | **Prior** | What we knew about $\boldsymbol{\beta}$ before seeing data |
+
+The equation says:
+
+> **"Our updated belief about $\boldsymbol{\beta}$ is proportional to how well it explains the data times what we believed before seeing the data."**
+
+---
+
+## 2.10 Special Cases
+
+### Case 1: Flat Prior (Non-informative)
+
+If $p(\boldsymbol{\beta}) \propto 1$ (constant):
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2)$$
+
+The posterior is proportional to the likelihood — the data dominates.
+
+### Case 2: Very Informative Prior
+
+If $p(\boldsymbol{\beta})$ is very concentrated (small variance):
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \approx p(\boldsymbol{\beta})$$
+
+The prior dominates — the data has little influence.
+
+
+# Part 3: Model Specification
+
+## 3.1 The Exponential Kriging Model
+
+$$Y(\mathbf{s}) = \mathbf{x}(\mathbf{s})^T \boldsymbol{\beta} + W(\mathbf{s}) + \epsilon(\mathbf{s})$$
+
+Where:
+- $W(\mathbf{s}) \sim GP(0, \sigma^2 H(\phi))$
+- $\epsilon(\mathbf{s}) \sim N(0, \tau^2)$
+- $H(\phi)_{ij} = \exp(-\phi \|\mathbf{s}_i - \mathbf{s}_j\|)$
+
+## 3.2 Two Forms
+
+### Conditional (Hierarchical) Form
+
+**Stage 1:**
+
+$$\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2 \sim N(\mathbf{X}\boldsymbol{\beta} + \mathbf{W}, \tau^2 \mathbf{I})$$
+
+**Stage 2:**
+
+$$\mathbf{W} \mid \sigma^2, \phi \sim N(\mathbf{0}, \sigma^2 H(\phi))$$
+
+### Marginal Form (after integrating out $\mathbf{W}$)
+
+$$\mathbf{Y} \mid \boldsymbol{\beta}, \sigma^2, \tau^2, \phi \sim N(\mathbf{X}\boldsymbol{\beta}, \sigma^2 H(\phi) + \tau^2 \mathbf{I})$$
+
+## 3.3 Prior Distributions
+
+- $\boldsymbol{\beta} \sim N(\boldsymbol{\mu}_\beta, \Sigma_\beta)$
+- $\tau^2 \sim IG(a_\tau, b_\tau)$
+- $\sigma^2 \sim IG(a_\sigma, b_\sigma)$
+- $\phi \sim \text{Gamma}(a_\phi, b_\phi)$
+
+
+# Part 4: Full Conditional for $\boldsymbol{\beta}$
+
+## 4.1 Apply Bayes' Theorem
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\boldsymbol{\beta})$$
+
+### Justification: Which Terms Depend on $\boldsymbol{\beta}$?
+
+| Term | Depends on $\boldsymbol{\beta}$? | Status |
+|:------|:----------------------------------|:--------|
+| $p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2)$ | **YES** | Keep |
+| $p(\mathbf{W} \mid \sigma^2, \phi)$ | NO (depends on $\sigma^2, \phi$) | Constant → drop |
+| $p(\tau^2)$ | NO | Constant → drop |
+| $p(\sigma^2)$ | NO | Constant → drop |
+| $p(\phi)$ | NO | Constant → drop |
+| $p(\boldsymbol{\beta})$ | **YES** | Keep |
+
+---
+
+## 4.2 Write the Likelihood
+
+From $\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2 \sim N(\mathbf{X}\boldsymbol{\beta} + \mathbf{W}, \tau^2 \mathbf{I})$:
+
+$$p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \propto \exp\left\{-\frac{1}{2\tau^2} (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta} - \mathbf{W})^T (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta} - \mathbf{W})\right\}$$
+
+---
+
+## 4.3 Write the Prior
+
+From $\boldsymbol{\beta} \sim N(\boldsymbol{\mu}_\beta, \Sigma_\beta)$:
+
+$$p(\boldsymbol{\beta}) \propto \exp\left\{-\frac{1}{2} (\boldsymbol{\beta} - \boldsymbol{\mu}_\beta)^T \Sigma_\beta^{-1} (\boldsymbol{\beta} - \boldsymbol{\mu}_\beta)\right\}$$
+
+
+## 4.4 Multiply
+
+$$p(\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2) \propto \exp\left\{-\frac{1}{2\tau^2} (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta} - \mathbf{W})^T (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta} - \mathbf{W}) - \frac{1}{2} (\boldsymbol{\beta} - \boldsymbol{\mu}_\beta)^T \Sigma_\beta^{-1} (\boldsymbol{\beta} - \boldsymbol{\mu}_\beta)\right\}$$
+
+---
+
+## 4.5 Complete the Square
+
+This yields a multivariate normal:
+
+$$\boxed{\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2 \sim N\left( \boldsymbol{\mu}_\beta^*, \Sigma_\beta^* \right)}$$
+
+Where:
+
+$$\Sigma_\beta^* = \left( \frac{1}{\tau^2} \mathbf{X}^T \mathbf{X} + \Sigma_\beta^{-1} \right)^{-1}$$
+
+$$\boldsymbol{\mu}_\beta^* = \Sigma_\beta^* \left( \frac{1}{\tau^2} \mathbf{X}^T (\mathbf{Y} - \mathbf{W}) + \Sigma_\beta^{-1} \boldsymbol{\mu}_\beta \right)$$
+
+### Special Case: Flat Prior
+
+If $\Sigma_\beta^{-1} \to 0$:
+
+$$\boldsymbol{\beta} \mid \mathbf{Y}, \mathbf{W}, \tau^2 \sim N\left( (\mathbf{X}^T \mathbf{X})^{-1} \mathbf{X}^T (\mathbf{Y} - \mathbf{W}), \tau^2 (\mathbf{X}^T \mathbf{X})^{-1} \right)$$
+
+
+# Part 5: Full Conditional for $\mathbf{W}$
+
+## 5.1 Apply Bayes' Theorem
+
+$$p(\mathbf{W} \mid \mathbf{Y}, \boldsymbol{\beta}, \sigma^2, \tau^2, \phi) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\mathbf{W} \mid \sigma^2, \phi)$$
+
+## 5.2 Define Residuals and Their Distribution
+
+Let $\mathbf{r}_\beta = \mathbf{Y} - \mathbf{X}\boldsymbol{\beta}$.
+
+From the data model:
+$$\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2 \sim N(\mathbf{X}\boldsymbol{\beta} + \mathbf{W}, \tau^2 \mathbf{I})$$
+
+Therefore, the conditional distribution of the residuals given $\mathbf{W}$ is:
+$$\mathbf{r}_\beta \mid \mathbf{W}, \tau^2 \sim N(\mathbf{W}, \tau^2 \mathbf{I})$$
+
+### Joint Distribution of $\mathbf{r}_\beta$ and $\mathbf{W}$
+
+We have:
+- $\mathbf{r}_\beta \mid \mathbf{W} \sim N(\mathbf{W}, \tau^2 \mathbf{I})$
+- $\mathbf{W} \sim N(\mathbf{0}, \sigma^2 H(\phi))$
+
+This is a standard hierarchical model where:
+- $\mathbf{r}_\beta$ is the "data" (observed residuals after removing the mean)
+- $\mathbf{W}$ is the latent spatial process
+
+### Marginal Distribution of $\mathbf{r}_\beta$
+
+Integrating out $\mathbf{W}$ from the joint distribution gives:
+$$\mathbf{r}_\beta \sim N(\mathbf{0}, \sigma^2 H(\phi) + \tau^2 \mathbf{I})$$
+
+This makes sense because:
+- $\mathbf{r}_\beta = \mathbf{W} + \text{noise}$
+- $\mathbf{W}$ has variance $\sigma^2 H(\phi)$
+- The noise has variance $\tau^2 \mathbf{I}$
+- They are independent, so the variances add
+
+This matches the marginal form of the model:
+$$\mathbf{Y} \mid \boldsymbol{\beta}, \sigma^2, \tau^2, \phi \sim N(\mathbf{X}\boldsymbol{\beta}, \sigma^2 H(\phi) + \tau^2 \mathbf{I})$$
+
+Therefore:
+$$\mathbf{r}_\beta = \mathbf{Y} - \mathbf{X}\boldsymbol{\beta} \sim N(\mathbf{0}, \sigma^2 H(\phi) + \tau^2 \mathbf{I})$$
+
+### Summary Table: Distributions of $\mathbf{r}_\beta$
+
+| Quantity | Distribution | Mean | Variance |
+|----------|--------------|------|----------|
+| $\mathbf{r}_\beta \mid \mathbf{W}$ | $N(\mathbf{W}, \tau^2 \mathbf{I})$ | $\mathbf{W}$ | $\tau^2 \mathbf{I}$ |
+| $\mathbf{W}$ | $N(\mathbf{0}, \sigma^2 H(\phi))$ | $\mathbf{0}$ | $\sigma^2 H(\phi)$ |
+| $\mathbf{r}_\beta$ (marginal) | $N(\mathbf{0}, \sigma^2 H(\phi) + \tau^2 \mathbf{I})$ | $\mathbf{0}$ | $\sigma^2 H(\phi) + \tau^2 \mathbf{I}$ |
+| $\mathbf{W} \mid \mathbf{r}_\beta$ | $N(\boldsymbol{\mu}_W^*, \Sigma_W^*)$ | $\boldsymbol{\mu}_W^*$ | $\Sigma_W^*$ |
+
+## 5.3 Write the Likelihood and Prior
+
+The likelihood (in terms of residuals) is:
+
+$$p(\mathbf{r}_\beta \mid \mathbf{W}, \tau^2) \propto \exp\left\{-\frac{1}{2\tau^2} (\mathbf{r}_\beta - \mathbf{W})^T (\mathbf{r}_\beta - \mathbf{W})\right\}$$
+
+The prior is:
+
+$$p(\mathbf{W} \mid \sigma^2, \phi) \propto \exp\left\{-\frac{1}{2\sigma^2} \mathbf{W}^T H(\phi)^{-1} \mathbf{W}\right\}$$
+
+## 5.4 Multiply and Complete the Square
+
+$$\propto \exp\left\{-\frac{1}{2} \left[ \frac{1}{\tau^2} (\mathbf{r}_\beta - \mathbf{W})^T (\mathbf{r}_\beta - \mathbf{W}) + \frac{1}{\sigma^2} \mathbf{W}^T H(\phi)^{-1} \mathbf{W} \right]\right\}$$
+
+This yields:
+
+$$\boxed{\mathbf{W} \mid \mathbf{Y}, \boldsymbol{\beta}, \sigma^2, \tau^2, \phi \sim N\left( \boldsymbol{\mu}_W^*, \Sigma_W^* \right)}$$
+
+## 5.5 Precision Form (Standard)
+
+$$\Sigma_W^* = \left( \frac{1}{\tau^2} \mathbf{I} + \frac{1}{\sigma^2} H(\phi)^{-1} \right)^{-1}$$
+
+$$\boldsymbol{\mu}_W^* = \Sigma_W^* \left( \frac{1}{\tau^2} \mathbf{r}_\beta \right)$$
+
+## Detailed derivations for 5.5
+Let
+
+$$
+\mathbf{r}_\beta = \mathbf{Y} - \mathbf{X}\boldsymbol{\beta}.
+$$
+
+The observation model can be written as
+
+$$
+\mathbf{r}_\beta = \mathbf{W} + \boldsymbol{\varepsilon},
+$$
+
+where
+
+$$
+\boldsymbol{\varepsilon} \sim N(\mathbf{0}, \tau^2\mathbf{I}).
+$$
+
+Therefore,
+
+$$
+\mathbf{r}_\beta \mid \mathbf{W}, \tau^2
+\sim
+N(\mathbf{W}, \tau^2\mathbf{I}).
+$$
+
+The prior distribution for the spatial random effects is
+
+$$
+\mathbf{W} \mid \sigma^2,\phi
+\sim
+N\left(
+\mathbf{0},
+\sigma^2 H(\phi)
+\right).
+$$
+
+Our objective is to derive the full conditional distribution
+
+$$
+p\left(
+\mathbf{W}
+\mid
+\mathbf{Y},
+\boldsymbol{\beta},
+\sigma^2,
+\tau^2,
+\phi
+\right).
+$$
+
+The final result will be
+
+$$
+\boxed{
+\mathbf{W}
+\mid
+\mathbf{Y},
+\boldsymbol{\beta},
+\sigma^2,
+\tau^2,
+\phi
+\sim
+N\left(
+\boldsymbol{\mu}_W^*,
+\Sigma_W^*
+\right)
+}
+$$
+
+where
+
+$$
+\boxed{
+\Sigma_W^*
+=
+\left(
+\frac{1}{\tau^2}\mathbf{I}
++
+\frac{1}{\sigma^2}H(\phi)^{-1}
+\right)^{-1}
+}
+$$
+
+and
+
+$$
+\boxed{
+\boldsymbol{\mu}_W^*
+=
+\Sigma_W^*
+\left(
+\frac{1}{\tau^2}\mathbf{r}_\beta
+\right).
+}
+$$
+
+# Step 1: Write the likelihood kernel
+
+Since
+
+$$
+\mathbf{r}_\beta \mid \mathbf{W},\tau^2
+\sim
+N(\mathbf{W},\tau^2\mathbf{I}),
+$$
+
+the likelihood kernel involving $\mathbf{W}$ is
+
+$$
+p(\mathbf{r}_\beta \mid \mathbf{W},\tau^2)
+\propto
+\exp\left\{
+-\frac{1}{2}
+(\mathbf{r}_\beta-\mathbf{W})^T
+(\tau^2\mathbf{I})^{-1}
+(\mathbf{r}_\beta-\mathbf{W})
+\right\}.
+$$
+
+Because
+
+$$
+(\tau^2\mathbf{I})^{-1}
+=
+\frac{1}{\tau^2}\mathbf{I},
+$$
+
+this becomes
+
+$$
+p(\mathbf{r}_\beta \mid \mathbf{W},\tau^2)
+\propto
+\exp\left\{
+-\frac{1}{2\tau^2}
+(\mathbf{r}_\beta-\mathbf{W})^T
+(\mathbf{r}_\beta-\mathbf{W})
+\right\}.
+$$
+
+# Step 2: Write the prior kernel
+
+The prior is
+
+$$
+\mathbf{W}
+\sim
+N\left(
+\mathbf{0},
+\sigma^2H(\phi)
+\right).
+$$
+
+Therefore, its kernel is
+
+$$
+p(\mathbf{W}\mid\sigma^2,\phi)
+\propto
+\exp\left\{
+-\frac{1}{2}
+\mathbf{W}^T
+\left[\sigma^2H(\phi)\right]^{-1}
+\mathbf{W}
+\right\}.
+$$
+
+Since
+
+$$
+\left[\sigma^2H(\phi)\right]^{-1}
+=
+\frac{1}{\sigma^2}H(\phi)^{-1},
+$$
+
+we obtain
+
+$$
+p(\mathbf{W}\mid\sigma^2,\phi)
+\propto
+\exp\left\{
+-\frac{1}{2\sigma^2}
+\mathbf{W}^TH(\phi)^{-1}\mathbf{W}
+\right\}.
+$$
+
+# Step 3: Multiply the likelihood and prior
+
+The full conditional distribution is proportional to the likelihood multiplied by the prior:
+
+$$
+p(\mathbf{W}\mid\cdots)
+\propto
+p(\mathbf{r}_\beta\mid\mathbf{W},\tau^2)
+p(\mathbf{W}\mid\sigma^2,\phi).
+$$
+
+Therefore,
+
+$$
+p(\mathbf{W}\mid\cdots)
+\propto
+\exp\left\{
+-\frac{1}{2}
+\left[
+\frac{1}{\tau^2}
+(\mathbf{r}_\beta-\mathbf{W})^T
+(\mathbf{r}_\beta-\mathbf{W})
++
+\frac{1}{\sigma^2}
+\mathbf{W}^TH(\phi)^{-1}\mathbf{W}
+\right]
+\right\}.
+$$
+
+For notational simplicity, write
+
+$$
+H = H(\phi).
+$$
+
+Then
+
+$$
+p(\mathbf{W}\mid\cdots)
+\propto
+\exp\left\{
+-\frac{1}{2}
+\left[
+\frac{1}{\tau^2}
+(\mathbf{r}_\beta-\mathbf{W})^T
+(\mathbf{r}_\beta-\mathbf{W})
++
+\frac{1}{\sigma^2}
+\mathbf{W}^TH^{-1}\mathbf{W}
+\right]
+\right\}.
+$$
+
+# Step 4: Expand the quadratic expression
+
+We use the identity
+
+$$
+(\mathbf{a}-\mathbf{b})^T(\mathbf{a}-\mathbf{b})
+=
+\mathbf{a}^T\mathbf{a}
+-
+2\mathbf{a}^T\mathbf{b}
++
+\mathbf{b}^T\mathbf{b}.
+$$
+
+Applying this identity gives
+
+$$
+(\mathbf{r}_\beta-\mathbf{W})^T
+(\mathbf{r}_\beta-\mathbf{W})
+=
+\mathbf{r}_\beta^T\mathbf{r}_\beta
+-
+2\mathbf{r}_\beta^T\mathbf{W}
++
+\mathbf{W}^T\mathbf{W}.
+$$
+
+Therefore,
+
+$$
+\frac{1}{\tau^2}
+(\mathbf{r}_\beta-\mathbf{W})^T
+(\mathbf{r}_\beta-\mathbf{W})
+=
+\frac{1}{\tau^2}\mathbf{r}_\beta^T\mathbf{r}_\beta
+-
+\frac{2}{\tau^2}\mathbf{r}_\beta^T\mathbf{W}
++
+\frac{1}{\tau^2}\mathbf{W}^T\mathbf{W}.
+$$
+
+After adding the prior term, the expression inside the exponent is
+
+$$
+\frac{1}{\tau^2}\mathbf{r}_\beta^T\mathbf{r}_\beta
+-
+\frac{2}{\tau^2}\mathbf{r}_\beta^T\mathbf{W}
++
+\frac{1}{\tau^2}\mathbf{W}^T\mathbf{W}
++
+\frac{1}{\sigma^2}\mathbf{W}^TH^{-1}\mathbf{W}.
+$$
+
+# Step 5: Remove terms that do not involve W
+
+The term
+
+$$
+\frac{1}{\tau^2}\mathbf{r}_\beta^T\mathbf{r}_\beta
+$$
+
+does not involve $\mathbf{W}$.
+
+When deriving the distribution of $\mathbf{W}$, any term that does not depend on $\mathbf{W}$ can be absorbed into the normalising constant.
+
+Thus,
+
+$$
+p(\mathbf{W}\mid\cdots)
+\propto
+\exp\left\{
+-\frac{1}{2}
+\left[
+\frac{1}{\tau^2}\mathbf{W}^T\mathbf{W}
++
+\frac{1}{\sigma^2}\mathbf{W}^TH^{-1}\mathbf{W}
+-
+\frac{2}{\tau^2}\mathbf{r}_\beta^T\mathbf{W}
+\right]
+\right\}.
+$$
+
+# Step 6: Combine the quadratic terms
+
+Because
+
+$$
+\mathbf{W}^T\mathbf{W}
+=
+\mathbf{W}^T\mathbf{I}\mathbf{W},
+$$
+
+we can write
+
+$$
+\frac{1}{\tau^2}\mathbf{W}^T\mathbf{W}
+=
+\mathbf{W}^T
+\left(
+\frac{1}{\tau^2}\mathbf{I}
+\right)
+\mathbf{W}.
+$$
+
+Similarly,
+
+$$
+\frac{1}{\sigma^2}\mathbf{W}^TH^{-1}\mathbf{W}
+=
+\mathbf{W}^T
+\left(
+\frac{1}{\sigma^2}H^{-1}
+\right)
+\mathbf{W}.
+$$
+
+Therefore, the two quadratic terms combine as
+
+$$
+\mathbf{W}^T
+\left(
+\frac{1}{\tau^2}\mathbf{I}
++
+\frac{1}{\sigma^2}H^{-1}
+\right)
+\mathbf{W}.
+$$
+
+The posterior kernel becomes
+
+$$
+p(\mathbf{W}\mid\cdots)
+\propto
+\exp\left\{
+-\frac{1}{2}
+\left[
+\mathbf{W}^T
+\left(
+\frac{1}{\tau^2}\mathbf{I}
++
+\frac{1}{\sigma^2}H^{-1}
+\right)
+\mathbf{W}
+-
+2
+\left(
+\frac{1}{\tau^2}\mathbf{r}_\beta
+\right)^T
+\mathbf{W}
+\right]
+\right\}.
+$$
+
+Define
+
+$$
+Q_W
+=
+\frac{1}{\tau^2}\mathbf{I}
++
+\frac{1}{\sigma^2}H^{-1}
+$$
+
+and
+
+$$
+\mathbf{b}_W
+=
+\frac{1}{\tau^2}\mathbf{r}_\beta.
+$$
+
+Then
+
+$$
+p(\mathbf{W}\mid\cdots)
+\propto
+\exp\left\{
+-\frac{1}{2}
+\left[
+\mathbf{W}^TQ_W\mathbf{W}
+-
+2\mathbf{b}_W^T\mathbf{W}
+\right]
+\right\}.
+$$
+
+# Step 7: Compare with a multivariate normal kernel
+
+Suppose
+
+$$
+\mathbf{W}\sim N(\boldsymbol{\mu},\Sigma).
+$$
+
+The kernel of a multivariate normal density is
+
+$$
+p(\mathbf{W})
+\propto
+\exp\left\{
+-\frac{1}{2}
+(\mathbf{W}-\boldsymbol{\mu})^T
+\Sigma^{-1}
+(\mathbf{W}-\boldsymbol{\mu})
+\right\}.
+$$
+
+Expanding the quadratic gives
+
+$$
+(\mathbf{W}-\boldsymbol{\mu})^T
+\Sigma^{-1}
+(\mathbf{W}-\boldsymbol{\mu})
+=
+\mathbf{W}^T\Sigma^{-1}\mathbf{W}
+-
+2\boldsymbol{\mu}^T\Sigma^{-1}\mathbf{W}
++
+\boldsymbol{\mu}^T\Sigma^{-1}\boldsymbol{\mu}.
+$$
+
+The final term,
+
+$$
+\boldsymbol{\mu}^T\Sigma^{-1}\boldsymbol{\mu},
+$$
+
+does not involve $\mathbf{W}$ and can be absorbed into the normalising constant.
+
+Thus, the relevant part of the normal kernel is
+
+$$
+\exp\left\{
+-\frac{1}{2}
+\left[
+\mathbf{W}^T\Sigma^{-1}\mathbf{W}
+-
+2\boldsymbol{\mu}^T\Sigma^{-1}\mathbf{W}
+\right]
+\right\}.
+$$
+
+Compare this with
+
+$$
+\exp\left\{
+-\frac{1}{2}
+\left[
+\mathbf{W}^TQ_W\mathbf{W}
+-
+2\mathbf{b}_W^T\mathbf{W}
+\right]
+\right\}.
+$$
+
+Matching the quadratic terms gives
+
+$$
+\Sigma_W^{*-1}=Q_W.
+$$
+
+Therefore,
+
+$$
+\Sigma_W^*=Q_W^{-1}.
+$$
+
+Substituting the definition of $Q_W$ gives
+
+$$
+\boxed{
+\Sigma_W^*
+=
+\left(
+\frac{1}{\tau^2}\mathbf{I}
++
+\frac{1}{\sigma^2}H(\phi)^{-1}
+\right)^{-1}.
+}
+$$
+
+This is the posterior covariance matrix of $\mathbf{W}$.
+
+# Step 8: Derive the posterior mean
+
+Matching the linear terms gives
+
+$$
+\boldsymbol{\mu}_W^{*T}\Sigma_W^{*-1}
+=
+\mathbf{b}_W^T.
+$$
+
+Equivalently,
+
+$$
+\Sigma_W^{*-1}\boldsymbol{\mu}_W^*
+=
+\mathbf{b}_W.
+$$
+
+Because
+
+$$
+\mathbf{b}_W
+=
+\frac{1}{\tau^2}\mathbf{r}_\beta,
+$$
+
+we have
+
+$$
+\Sigma_W^{*-1}\boldsymbol{\mu}_W^*
+=
+\frac{1}{\tau^2}\mathbf{r}_\beta.
+$$
+
+Multiply both sides by $\Sigma_W^*$:
+
+$$
+\Sigma_W^*
+\Sigma_W^{*-1}
+\boldsymbol{\mu}_W^*
+=
+\Sigma_W^*
+\left(
+\frac{1}{\tau^2}\mathbf{r}_\beta
+\right).
+$$
+
+Since
+
+$$
+\Sigma_W^*\Sigma_W^{*-1}=\mathbf{I},
+$$
+
+we obtain
+
+$$
+\boxed{
+\boldsymbol{\mu}_W^*
+=
+\Sigma_W^*
+\left(
+\frac{1}{\tau^2}\mathbf{r}_\beta
+\right).
+}
+$$
+
+Since
+
+$$
+\mathbf{r}_\beta
+=
+\mathbf{Y}-\mathbf{X}\boldsymbol{\beta},
+$$
+
+the posterior mean can also be written as
+
+$$
+\boxed{
+\boldsymbol{\mu}_W^*
+=
+\Sigma_W^*
+\frac{
+\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}
+}{\tau^2}.
+}
+$$
+
+# Step 9: Complete the square directly
+
+A useful matrix identity is
+
+$$
+\mathbf{W}^TQ_W\mathbf{W}
+-
+2\mathbf{b}_W^T\mathbf{W}
+=
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)^T
+Q_W
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)
+-
+\mathbf{b}_W^TQ_W^{-1}\mathbf{b}_W.
+$$
+
+To verify this, expand the first term on the right-hand side:
+
+$$
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)^T
+Q_W
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W).
+$$
+
+This equals
+
+$$
+\mathbf{W}^TQ_W\mathbf{W}
+-
+\mathbf{W}^T\mathbf{b}_W
+-
+\mathbf{b}_W^T\mathbf{W}
++
+\mathbf{b}_W^TQ_W^{-1}\mathbf{b}_W.
+$$
+
+Because both $\mathbf{W}^T\mathbf{b}_W$ and $\mathbf{b}_W^T\mathbf{W}$ are scalars,
+
+$$
+\mathbf{W}^T\mathbf{b}_W
+=
+\mathbf{b}_W^T\mathbf{W}.
+$$
+
+Therefore,
+
+$$
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)^T
+Q_W
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)
+=
+\mathbf{W}^TQ_W\mathbf{W}
+-
+2\mathbf{b}_W^T\mathbf{W}
++
+\mathbf{b}_W^TQ_W^{-1}\mathbf{b}_W.
+$$
+
+Rearranging gives
+
+$$
+\mathbf{W}^TQ_W\mathbf{W}
+-
+2\mathbf{b}_W^T\mathbf{W}
+=
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)^T
+Q_W
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)
+-
+\mathbf{b}_W^TQ_W^{-1}\mathbf{b}_W.
+$$
+
+The term
+
+$$
+-\mathbf{b}_W^TQ_W^{-1}\mathbf{b}_W
+$$
+
+does not depend on $\mathbf{W}$, so it can be absorbed into the normalising constant.
+
+Thus,
+
+$$
+p(\mathbf{W}\mid\cdots)
+\propto
+\exp\left\{
+-\frac{1}{2}
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)^T
+Q_W
+(\mathbf{W}-Q_W^{-1}\mathbf{b}_W)
+\right\}.
+$$
+
+This is the kernel of a multivariate normal distribution with
+
+$$
+\text{precision matrix}=Q_W,
+$$
+
+$$
+\text{covariance matrix}=Q_W^{-1},
+$$
+
+and
+
+$$
+\text{mean vector}=Q_W^{-1}\mathbf{b}_W.
+$$
+
+Therefore,
+
+$$
+\boxed{
+\mathbf{W}
+\mid
+\mathbf{Y},
+\boldsymbol{\beta},
+\sigma^2,
+\tau^2,
+\phi
+\sim
+N\left(
+\boldsymbol{\mu}_W^*,
+\Sigma_W^*
+\right)
+}
+$$
+
+where
+
+$$
+\boxed{
+\Sigma_W^*
+=
+\left(
+\frac{1}{\tau^2}\mathbf{I}
++
+\frac{1}{\sigma^2}H(\phi)^{-1}
+\right)^{-1}
+}
+$$
+
+and
+
+$$
+\boxed{
+\boldsymbol{\mu}_W^*
+=
+\Sigma_W^*
+\left(
+\frac{1}{\tau^2}\mathbf{r}_\beta
+\right).
+}
+$$
+
+# Interpretation using precision matrices
+
+There are two sources of information about $\mathbf{W}$.
+
+First, the likelihood says that $\mathbf{W}$ should be close to
+
+$$
+\mathbf{r}_\beta
+=
+\mathbf{Y}-\mathbf{X}\boldsymbol{\beta},
+$$
+
+with covariance matrix
+
+$$
+\tau^2\mathbf{I}.
+$$
+
+Therefore, the likelihood precision matrix is
+
+$$
+(\tau^2\mathbf{I})^{-1}
+=
+\frac{1}{\tau^2}\mathbf{I}.
+$$
+
+Second, the prior says that
+
+$$
+\mathbf{W}
+\sim
+N\left(
+\mathbf{0},
+\sigma^2H(\phi)
+\right).
+$$
+
+Therefore, the prior precision matrix is
+
+$$
+\left[
+\sigma^2H(\phi)
+\right]^{-1}
+=
+\frac{1}{\sigma^2}H(\phi)^{-1}.
+$$
+
+For a normal likelihood combined with a normal prior, the posterior precision is the sum of the likelihood precision and the prior precision:
+
+$$
+\boxed{
+\text{posterior precision}
+=
+\text{likelihood precision}
++
+\text{prior precision}.
+}
+$$
+
+Hence,
+
+$$
+\boxed{
+\Sigma_W^{*-1}
+=
+\frac{1}{\tau^2}\mathbf{I}
++
+\frac{1}{\sigma^2}H(\phi)^{-1}.
+}
+$$
+
+The posterior mean is the posterior covariance multiplied by the precision-weighted mean information:
+
+$$
+\boldsymbol{\mu}_W^*
+=
+\Sigma_W^*
+\left[
+\frac{1}{\tau^2}\mathbf{r}_\beta
++
+\frac{1}{\sigma^2}H(\phi)^{-1}\mathbf{0}
+\right].
+$$
+
+Because the prior mean is zero,
+
+$$
+\frac{1}{\sigma^2}H(\phi)^{-1}\mathbf{0}
+=
+\mathbf{0}.
+$$
+
+Therefore,
+
+$$
+\boxed{
+\boldsymbol{\mu}_W^*
+=
+\Sigma_W^*
+\left(
+\frac{1}{\tau^2}\mathbf{r}_\beta
+\right).
+}
+$$
+
+# Scalar analogy
+
+The same idea is easier to see in one dimension.
+
+Suppose
+
+$$
+r\mid W
+\sim
+N(W,\tau^2)
+$$
+
+and
+
+$$
+W\sim N(0,\sigma^2).
+$$
+
+Then the posterior precision is
+
+$$
+\frac{1}{\tau^2}+\frac{1}{\sigma^2}.
+$$
+
+Thus, the posterior variance is
+
+$$
+v^*
+=
+\left(
+\frac{1}{\tau^2}
++
+\frac{1}{\sigma^2}
+\right)^{-1}.
+$$
+
+The posterior mean is
+
+$$
+m^*
+=
+v^*
+\left(
+\frac{r}{\tau^2}
++
+\frac{0}{\sigma^2}
+\right).
+$$
+
+Therefore,
+
+$$
+m^*
+=
+v^*\frac{r}{\tau^2}.
+$$
+
+The multivariate result is exactly the matrix version of this scalar normal-normal update:
+
+$$
+\Sigma_W^*
+=
+\left(
+\frac{1}{\tau^2}\mathbf{I}
++
+\frac{1}{\sigma^2}H(\phi)^{-1}
+\right)^{-1},
+$$
+
+and
+
+$$
+\boldsymbol{\mu}_W^*
+=
+\Sigma_W^*
+\left(
+\frac{1}{\tau^2}\mathbf{r}_\beta
+\right).
+$$
+
+
+
+## 5.6 Compact Covariance Form 
+
+Using the Woodbury matrix identity, the precision form can be rewritten as:
+
+$$\boxed{\Sigma_W^* = \tau^2 \sigma^2 H(\phi) \left[ \sigma^2 H(\phi) + \tau^2 \mathbf{I} \right]^{-1}}$$
+
+$$\boxed{\boldsymbol{\mu}_W^* = \sigma^2 H(\phi) \left[ \sigma^2 H(\phi) + \tau^2 \mathbf{I} \right]^{-1} \mathbf{r}_\beta}$$
+
+### Verification of Compact Form
+
+Define $K = \sigma^2 H(\phi)$ and $R = \tau^2 \mathbf{I}$.
+
+Then the conditional mean and covariance are:
+
+$$\boldsymbol{\mu}_W^* = K (K + R)^{-1} \mathbf{r}_\beta$$
+
+$$\Sigma_W^* = K - K(K + R)^{-1}K$$
+
+Using the identity $K - K(K+R)^{-1}K = KR(K+R)^{-1}$, we get:
+
+$$\Sigma_W^* = KR(K+R)^{-1} = \sigma^2 H(\phi) \tau^2 \mathbf{I} [\sigma^2 H(\phi) + \tau^2 \mathbf{I}]^{-1}$$
+
+$$\Sigma_W^* = \tau^2 \sigma^2 H(\phi) [\sigma^2 H(\phi) + \tau^2 \mathbf{I}]^{-1}$$
+
+This confirms the compact form above.
+
+## 5.7 Intuitive Interpretation of $\boldsymbol{\mu}_W^*$
+
+The conditional mean $\boldsymbol{\mu}_W^*$ is a **shrinkage estimator** (the kriging predictor):
+
+$$\boldsymbol{\mu}_W^* = \sigma^2 H(\phi)[\sigma^2 H(\phi) + \tau^2 \mathbf{I}]^{-1} \mathbf{r}_\beta$$
+
+Think of it as:
+- The spatial process $\mathbf{W}$ is "shrunk" toward zero
+- The amount of shrinkage depends on the relative sizes of $\sigma^2$ (spatial variance) and $\tau^2$ (nugget variance)
+- If $\tau^2$ is large (lots of noise), $\boldsymbol{\mu}_W^*$ is shrunk more toward zero
+- If $\sigma^2$ is large (strong spatial signal), $\boldsymbol{\mu}_W^*$ is closer to $\mathbf{r}_\beta$
+
+This is the **best linear unbiased predictor (BLUP)** of the spatial random effects given the residuals.
+
+## 5.8 Common Mistake to Avoid
+
+The following expression is **INCORRECT**:
+
+$$\boldsymbol{\mu}_W^* \neq H(\phi) [\tau^2 H(\phi) + \sigma^2 \mathbf{I}]^{-1} \mathbf{r}_\beta$$
+
+This incorrect form:
+- Swaps the roles of $\sigma^2$ and $\tau^2$
+- Omits the factor $\sigma^2$
+
+The **CORRECT** form is:
+
+$$\boldsymbol{\mu}_W^* = \sigma^2 H(\phi) [\sigma^2 H(\phi) + \tau^2 \mathbf{I}]^{-1} \mathbf{r}_\beta$$
+
+### Why the Incorrect Form Swaps the Roles
+
+| Aspect | Correct Form | Incorrect Form |
+|:--------|:--------------:|----------------|
+| What scales $H(\phi)$ | $\sigma^2$ (spatial variance) ✓ | $\tau^2$ (nugget) ✗ |
+| What's on the identity | $\tau^2$ (nugget) ✓ | $\sigma^2$ (spatial variance) ✗ |
+| Overall scale | $\sigma^2$ ✓ | Missing $\sigma^2$ ✗ |
+
+The incorrect form treats the nugget variance as if it were the spatial variance, and vice versa. Since $\sigma^2$ is the spatial variance that scales the correlation matrix $H(\phi)$, it must appear with $H(\phi)$ in the correct form.
+
+
+# Part 6: Full Conditional for $\tau^2$
+
+## 6.1 Apply Bayes' Theorem
+
+$$p(\tau^2 \mid \mathbf{Y}, \boldsymbol{\beta}, \mathbf{W}) \propto p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \times p(\tau^2)$$
+
+## 6.2 Multiply
+
+$$\propto (\tau^2)^{-n/2} \exp\left\{-\frac{1}{2\tau^2} (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta} - \mathbf{W})^T (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta} - \mathbf{W})\right\} \times (\tau^2)^{-(a_\tau + 1)} \exp\left(-\frac{b_\tau}{\tau^2}\right)$$
+
+## 6.3 Recognize Inverse-Gamma
+
+$$\boxed{\tau^2 \mid \mathbf{Y}, \boldsymbol{\beta}, \mathbf{W} \sim IG\left( a_\tau^*, b_\tau^* \right)}$$
+
+Where:
+
+$$a_\tau^* = a_\tau + \frac{n}{2}$$
+
+$$b_\tau^* = b_\tau + \frac{1}{2} (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta} - \mathbf{W})^T (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta} - \mathbf{W})$$
+
+
+# Part 7: Full Conditional for $\sigma^2$
+
+## 7.1 Apply Bayes' Theorem
+
+$$p(\sigma^2 \mid \mathbf{W}, \phi) \propto p(\mathbf{W} \mid \sigma^2, \phi) \times p(\sigma^2)$$
+
+## 7.2 Multiply
+
+$$\propto (\sigma^2)^{-n/2} \exp\left\{-\frac{1}{2\sigma^2} \mathbf{W}^T H(\phi)^{-1} \mathbf{W}\right\} \times (\sigma^2)^{-(a_\sigma + 1)} \exp\left(-\frac{b_\sigma}{\sigma^2}\right)$$
+
+## 7.3 Recognize Inverse-Gamma
+
+$$\boxed{\sigma^2 \mid \mathbf{W}, \phi \sim IG\left( a_\sigma^*, b_\sigma^* \right)}$$
+
+Where:
+
+$$a_\sigma^* = a_\sigma + \frac{n}{2}$$
+
+$$b_\sigma^* = b_\sigma + \frac{1}{2} \mathbf{W}^T H(\phi)^{-1} \mathbf{W}$$
+
+---
+
+# Part 8: Full Conditional for $\phi$
+
+## 8.1 Apply Bayes' Theorem
+
+$$p(\phi \mid \mathbf{W}, \sigma^2) \propto p(\mathbf{W} \mid \sigma^2, \phi) \times p(\phi)$$
+
+## 8.2 Multiply
+
+$$\propto |H(\phi)|^{-1/2} \exp\left\{-\frac{1}{2\sigma^2} \mathbf{W}^T H(\phi)^{-1} \mathbf{W}\right\} \times p(\phi)$$
+
+## 8.3 Non-Standard Distribution
+
+$\phi$ appears inside $H(\phi)$ in a nonlinear way through $\exp(-\phi \|\mathbf{s}_i - \mathbf{s}_j\|)$. There is **no closed-form conjugate distribution**.
+
+$$\boxed{\text{Update } \phi \text{ using Metropolis-Hastings or slice sampling}}$$
+
+### Marginalized Form (if $\mathbf{W}$ is integrated out):
+
+$$p(\phi \mid \mathbf{Y}, \boldsymbol{\beta}, \sigma^2, \tau^2) \propto \left| \sigma^2 H(\phi) + \tau^2 \mathbf{I} \right|^{-1/2} \exp\left\{-\frac{1}{2} (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta})^T (\sigma^2 H(\phi) + \tau^2 \mathbf{I})^{-1} (\mathbf{Y} - \mathbf{X}\boldsymbol{\beta}) \right\} \times p(\phi)$$
+
+---
+
+# Part 9: Summary Table
+
+| Parameter | Full Conditional | Distribution Type | Update Method |
+|:-----------|:------------------|:-------------------|:---------------|
+| $\boldsymbol{\beta}$ | $N\left( \boldsymbol{\mu}_\beta^*, \Sigma_\beta^* \right)$ | Closed form | Gibbs |
+| $\mathbf{W}$ | $N\left( \boldsymbol{\mu}_W^*, \Sigma_W^* \right)$ | Closed form | Gibbs |
+| $\tau^2$ | $IG\left( a_\tau^*, b_\tau^* \right)$ | Closed form | Gibbs |
+| $\sigma^2$ | $IG\left( a_\sigma^*, b_\sigma^* \right)$ | Closed form | Gibbs |
+| $\phi$ | Non-standard | No closed form | Metropolis-Hastings / Slice |
+
+---
+
+# Part 10: Why the Marginal Form?
+
+## 10.1 Integrating Out $\mathbf{W}$
+
+The marginal likelihood is obtained by integrating $\mathbf{W}$ out of the joint distribution:
+
+$$p(\mathbf{Y} \mid \boldsymbol{\beta}, \sigma^2, \tau^2, \phi) = \int p(\mathbf{Y} \mid \boldsymbol{\beta}, \mathbf{W}, \tau^2) \; p(\mathbf{W} \mid \sigma^2, \phi) \; d\mathbf{W}$$
+
+Since both are normal, the integral is analytic:
+
+$$\mathbf{Y} \mid \boldsymbol{\beta}, \sigma^2, \tau^2, \phi \sim N(\mathbf{X}\boldsymbol{\beta}, \sigma^2 H(\phi) + \tau^2 \mathbf{I})$$
+
+## 10.2 Advantages of the Marginal Form
+
+1. **Fewer parameters** in MCMC (no $\mathbf{W}$ updates inside the chain)
+2. **Better conditioned** covariance matrix: $\sigma^2 H(\phi) + \tau^2 \mathbf{I}$ is less singular than $\sigma^2 H(\phi)$ alone
+3. **Faster convergence** and better mixing
+
+## 10.3 Recovering $\mathbf{W}$
+
+After MCMC, draw $\mathbf{W}$ from its conditional distribution:
+
+$$p(\mathbf{W} \mid \mathbf{Y}, \boldsymbol{\beta}, \sigma^2, \tau^2, \phi) = N\left( \boldsymbol{\mu}_W^*, \Sigma_W^* \right)$$
+
+---
+
+# References
+
+- Banerjee, S., Gelfand, A. E., & Carlin, B. P. (2026). *Hierarchical Modeling and Analysis for Spatial Data* (3rd ed.). CRC Press.
+- Chapter 6: Hierarchical Modeling for Univariate Spatial Data
+- Section 6.3: Details on Bayesian Inference for Isotropic Models

@@ -1,0 +1,244 @@
+---
+title: "Impropriety of the Posterior"
+output:
+  html_document:
+    css: styles.css
+    toc: true
+    toc_float: true
+---
+
+## Problem
+
+Assuming the likelihood in (6.3), suppose that $\phi$ is fixed and that we adopt the prior
+
+$$
+p(\boldsymbol\beta,\sigma^2,\tau^2) \propto \frac{1}{\sigma^2\tau^2}.
+$$
+
+Show that the resulting posterior
+
+$$
+p(\boldsymbol\beta,\sigma^2,\tau^2\mid\mathbf y)
+$$
+
+is improper.
+
+## 1. Marginal likelihood
+
+For the spatial regression model, the marginal likelihood in (6.3) is
+
+$$
+\mathbf y\mid\boldsymbol\beta,\sigma^2,\tau^2,\phi
+\sim
+N_n\!\left(
+X\boldsymbol\beta,
+\sigma^2H(\phi)+\tau^2I_n
+\right).
+$$
+
+Because $\phi$ is fixed, write
+
+$$
+H=H(\phi)
+$$
+
+and define
+
+$$
+\Sigma(\sigma^2,\tau^2)=\sigma^2H+\tau^2I_n.
+$$
+
+Therefore, the likelihood is
+
+$$
+L(\boldsymbol\beta,\sigma^2,\tau^2)
+=(2\pi)^{-n/2}|\Sigma(\sigma^2,\tau^2)|^{-1/2}
+\exp\left\{
+-\frac12(\mathbf y-X\boldsymbol\beta)^T
+\Sigma(\sigma^2,\tau^2)^{-1}
+(\mathbf y-X\boldsymbol\beta)
+\right\}.
+$$
+
+## 2. Posterior kernel
+
+Combining the likelihood with the prior gives
+
+$$
+p(\boldsymbol\beta,\sigma^2,\tau^2\mid\mathbf y)
+\propto
+L(\boldsymbol\beta,\sigma^2,\tau^2)
+\frac{1}{\sigma^2\tau^2}.
+$$
+
+Equivalently,
+
+$$
+\begin{aligned}
+p(\boldsymbol\beta,\sigma^2,\tau^2\mid\mathbf y)
+\propto{}&
+\frac{|\sigma^2H+\tau^2I_n|^{-1/2}}
+{\sigma^2\tau^2}\\
+&\times
+\exp\left\{
+-\frac12(\mathbf y-X\boldsymbol\beta)^T
+(\sigma^2H+\tau^2I_n)^{-1}
+(\mathbf y-X\boldsymbol\beta)
+\right\}.
+\end{aligned}
+$$
+
+The posterior is proper only if its normalising constant is finite:
+
+$$
+C=
+\int_{\mathbb R^p}\int_0^\infty\int_0^\infty
+L(\boldsymbol\beta,\sigma^2,\tau^2)
+\frac{1}{\sigma^2\tau^2}
+\,d\sigma^2\,d\tau^2\,d\boldsymbol\beta <\infty.
+$$
+
+We will show that $C=\infty$.
+
+## 3. Behaviour as the spatial variance approaches zero
+
+Fix $\tau^2>0$. As $\sigma^2\rightarrow0$,
+
+$$
+\sigma^2H+\tau^2I_n\longrightarrow\tau^2I_n.
+$$
+
+It follows that
+
+$$
+|\sigma^2H+\tau^2I_n|^{-1/2}
+\longrightarrow
+|\tau^2I_n|^{-1/2}
+=(\tau^2)^{-n/2},
+$$
+
+and
+
+$$
+(\sigma^2H+\tau^2I_n)^{-1}
+\longrightarrow
+\frac{1}{\tau^2}I_n.
+$$
+
+Thus, the likelihood converges to
+
+$$
+L(\boldsymbol\beta,0,\tau^2)
+=(2\pi\tau^2)^{-n/2}
+\exp\left\{
+-\frac{\|\mathbf y-X\boldsymbol\beta\|^2}{2\tau^2}
+\right\}.
+$$
+
+For every finite $\boldsymbol\beta$ and every $\tau^2>0$, this limiting likelihood is finite and strictly positive. Therefore, near $\sigma^2=0$, the likelihood does not approach zero and cannot cancel the prior factor $1/\sigma^2$.
+
+The posterior consequently behaves like
+
+$$
+p(\boldsymbol\beta,\sigma^2,\tau^2\mid\mathbf y)
+\approx
+L(\boldsymbol\beta,0,\tau^2)
+\frac{1}{\sigma^2\tau^2}.
+$$
+
+Its dependence on $\sigma^2$ near zero is therefore proportional to $1/\sigma^2$.
+
+## 4. Rigorous lower-bound argument
+
+Choose a closed and bounded set $B\subset\mathbb R^p$ having positive volume, and choose constants
+
+$$
+0<a<b<\infty,
+\qquad
+\varepsilon>0.
+$$
+
+Restrict the parameter space to
+
+$$
+\boldsymbol\beta\in B,
+\qquad
+a\leq\tau^2\leq b,
+\qquad
+0<\sigma^2\leq\varepsilon.
+$$
+
+The likelihood extends continuously to $\sigma^2=0$. Moreover, it is strictly positive on the compact set
+
+$$
+B\times[0,\varepsilon]\times[a,b].
+$$
+
+Consequently, there is a constant $m>0$ such that
+
+$$
+L(\boldsymbol\beta,\sigma^2,\tau^2)\geq m
+$$
+
+throughout this set. Hence,
+
+$$
+\begin{aligned}
+C
+&\geq
+\int_B\int_a^b\int_0^\varepsilon
+L(\boldsymbol\beta,\sigma^2,\tau^2)
+\frac{1}{\sigma^2\tau^2}
+\,d\sigma^2\,d\tau^2\,d\boldsymbol\beta\\
+&\geq
+m
+\int_Bd\boldsymbol\beta
+\int_a^b\frac{1}{\tau^2}\,d\tau^2
+\int_0^\varepsilon\frac{1}{\sigma^2}\,d\sigma^2.
+\end{aligned}
+$$
+
+Let $s=\sigma^2$. The last integral is
+
+$$
+\int_0^\varepsilon\frac{1}{\sigma^2}\,d\sigma^2
+=
+\int_0^\varepsilon\frac{1}{s}\,ds
+=\infty.
+$$
+
+The other two integrals are finite and strictly positive, so
+
+$$
+C=\infty.
+$$
+
+Therefore, no finite normalising constant exists.
+
+## 5. The same issue at $\tau^2=0$
+
+There is also a symmetric problem as $\tau^2\rightarrow0$. If $\sigma^2>0$ is fixed and $H$ is positive definite, then
+
+$$
+\sigma^2H+\tau^2I_n\longrightarrow\sigma^2H,
+$$
+
+so the likelihood again converges to a finite, strictly positive quantity. It therefore cannot cancel the prior factor $1/\tau^2$, and
+
+$$
+\int_0^\varepsilon\frac{1}{\tau^2}\,d\tau^2=\infty.
+$$
+
+Only one divergent boundary is required to establish impropriety, but here both variance-component boundaries cause the same problem.
+
+## Conclusion
+
+When one variance component approaches zero, the other variance component keeps the covariance matrix nonsingular. The likelihood therefore remains positive at the boundary, while the prior has a non-integrable singularity there. Hence,
+
+$$
+\boxed{
+p(\boldsymbol\beta,\sigma^2,\tau^2\mid\mathbf y)
+\text{ is improper.}
+}
+$$
+

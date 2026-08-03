@@ -1,0 +1,381 @@
+---
+title: "Log-Concavity of Full Conditional Distributions in Spatial GLMMs"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    css: styles.css
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Model Setup
+
+From equation (6.31), the likelihood for observation at location $\mathbf{s}_i$ is:
+
+$$
+f\{y(\mathbf{s}_i)\mid\boldsymbol\beta,w(\mathbf{s}_i),\gamma\}
+=h\{y(\mathbf{s}_i),\gamma\}
+\exp\left(
+\gamma\left[y(\mathbf{s}_i)\eta(\mathbf{s}_i)
+-\psi\{\eta(\mathbf{s}_i)\}\right]
+\right).
+$$
+
+The link function is:
+
+$$
+g\{\eta(\mathbf{s}_i)\}
+=\mathbf{x}^{T}(\mathbf{s}_i)\boldsymbol\beta+w(\mathbf{s}_i).
+$$
+
+Given $g(\theta)=\theta$, the link is the identity link, so:
+
+$$
+\eta(\mathbf{s}_i)
+=\mathbf{x}^{T}(\mathbf{s}_i)\boldsymbol\beta+w(\mathbf{s}_i).
+$$
+
+## Prior Distributions
+
+Assume the proper normal prior:
+
+$$
+\boldsymbol\beta\sim N_p(\boldsymbol\mu,\boldsymbol\Sigma),
+$$
+
+where $\boldsymbol\Sigma$ is positive definite. Define the precision matrix:
+
+$$
+\mathbf Q = \boldsymbol\Sigma^{-1}.
+$$
+
+The spatial random effects follow a Gaussian process:
+
+$$
+\mathbf{W}\sim N_n\{\mathbf{0},\sigma^2\mathbf{H}(\phi)\},
+$$
+
+where:
+
+$$
+\mathbf{W}
+=\{w(\mathbf{s}_1),\ldots,w(\mathbf{s}_n)\}^{T}.
+$$
+
+We assume that $\gamma>0$ and that the prior distributions of
+$\boldsymbol\beta$, $\mathbf W$, and $\gamma$ are mutually independent.
+
+## Overview of Approach
+
+To prove log-concavity, we will:
+
+1. **Take the logarithm** of the full conditional distribution
+2. **Compute the second derivative** with respect to the parameter of interest
+3. **Show the second derivative is strictly negative** for all parameter values
+4. **Conclude** that the log-density is strictly concave, hence the distribution is log-concave
+
+# Part (a): Full Conditional Distributions of $\boldsymbol\beta$ Components
+
+## Step 1: Express the Full Conditional
+
+For the $j$th component of $\boldsymbol\beta$, the full conditional distribution is:
+
+$$
+p(\beta_j\mid\boldsymbol\beta_{-j},\mathbf W,\gamma,\mathbf y)
+\propto
+p(\mathbf y\mid\boldsymbol\beta,\mathbf W,\gamma)
+p(\boldsymbol\beta).
+$$
+
+The prior terms involving $\mathbf W$ and $\gamma$ are absorbed into the
+proportionality constant because they do not depend on $\beta_j$.
+
+## Step 2: Write $\eta(\mathbf{s}_i)$ in Terms of $\beta_j$
+
+Since $\eta(\mathbf{s}_i) = \mathbf{x}^{T}(\mathbf{s}_i)\boldsymbol\beta + w(\mathbf{s}_i)$, we can expand:
+
+$$
+\eta(\mathbf{s}_i)
+= x_j(\mathbf{s}_i)\beta_j + \sum_{k\neq j} x_k(\mathbf{s}_i)\beta_k + w(\mathbf{s}_i).
+$$
+
+Define:
+
+$$
+c_i = \sum_{k\neq j} x_k(\mathbf{s}_i)\beta_k + w(\mathbf{s}_i),
+$$
+
+which is **constant with respect to $\beta_j$**. Then:
+
+$$
+\eta(\mathbf{s}_i) = x_j(\mathbf{s}_i)\beta_j + c_i.
+$$
+
+## Step 3: Derive the Log-Full Conditional
+
+Taking the logarithm of the full conditional (up to additive constants):
+
+$$
+\ell(\beta_j) = 
+\underbrace{\gamma\sum_{i=1}^{n}
+\left[
+y(\mathbf{s}_i)\{x_j(\mathbf{s}_i)\beta_j + c_i\}
+-\psi\{x_j(\mathbf{s}_i)\beta_j + c_i\}
+\right]}_{\text{Likelihood contribution}}
+-
+\underbrace{\frac{1}{2}(\boldsymbol\beta-\boldsymbol\mu)^T\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)}_{\text{Prior contribution}}
++ C.
+$$
+
+### Expansion of the Prior Term
+
+To see how the prior contributes to the derivative, expand the quadratic form:
+
+$$
+(\boldsymbol\beta-\boldsymbol\mu)^T\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)
+= Q_{jj}(\beta_j-\mu_j)^2 + 2(\beta_j-\mu_j)\sum_{k\neq j} Q_{jk}(\beta_k-\mu_k) + \text{terms not involving }\beta_j.
+$$
+
+Thus, the prior contribution to $\ell(\beta_j)$ is:
+
+$$
+-\frac{1}{2}Q_{jj}(\beta_j-\mu_j)^2 - (\beta_j-\mu_j)\sum_{k\neq j} Q_{jk}(\beta_k-\mu_k) + C.
+$$
+
+## Step 4: Compute the First Derivative
+
+Differentiating $\ell(\beta_j)$ with respect to $\beta_j$:
+
+$$
+\ell'(\beta_j)
+= \gamma\sum_{i=1}^{n}x_j(\mathbf{s}_i)
+\left[
+y(\mathbf{s}_i)
+-\psi'\{x_j(\mathbf{s}_i)\beta_j+c_i\}
+\right]
+-
+\left[\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)\right]_j,
+$$
+
+where $\left[\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)\right]_j$ denotes the $j$th component of the vector $\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)$.
+
+## Step 5: Compute the Second Derivative
+
+Differentiating again:
+
+$$
+\ell''(\beta_j)
+= -\gamma\sum_{i=1}^{n}
+\psi''\{x_j(\mathbf{s}_i)\beta_j+c_i\}
+\cdot x_j(\mathbf{s}_i)^2
+- Q_{jj}.
+$$
+
+## Step 6: Establish Log-Concavity
+
+For a regular exponential family, $\psi(\eta)$ is **strictly convex**, so:
+
+$$
+\psi''(\eta) > 0.
+$$
+
+Additionally, we have:
+
+- **$\gamma > 0$** (dispersion parameter)
+- **$x_j(\mathbf{s}_i)^2 \geq 0$** (squared covariate)
+- **$Q_{jj} > 0$** because $\boldsymbol\Sigma$ is positive definite
+
+Therefore, **every term in $\ell''(\beta_j)$ is negative**:
+
+$$
+\ell''(\beta_j) = 
+\underbrace{-\gamma\sum_{i=1}^{n}
+\psi''(\cdot) \cdot x_j(\mathbf{s}_i)^2}_{\leq 0}
+\underbrace{- Q_{jj}}_{< 0}
+< 0.
+$$
+
+### Key Insight
+
+The strict negativity comes from the prior precision $Q_{jj} > 0$. Even if the likelihood contribution were zero (which can't happen for all $i$), the prior ensures strict concavity.
+
+**Conclusion:** $\ell(\beta_j)$ is strictly concave for all $\beta_j$, so the full conditional distribution $p(\beta_j\mid\boldsymbol\beta_{-j},\mathbf W,\gamma,\mathbf y)$ is **log-concave**.
+
+# Part (b): Full Conditional Distributions of $w(\mathbf{s}_i)$
+
+## Step 1: Express the Full Conditional
+
+For a fixed spatial location $\mathbf{s}_i$:
+
+$$
+p\{w(\mathbf{s}_i)\mid
+\boldsymbol\beta,\mathbf W_{-i},\gamma,\mathbf y\}
+\propto
+p\{y(\mathbf{s}_i)\mid
+\boldsymbol\beta,w(\mathbf{s}_i),\gamma\}
+\cdot
+p\{w(\mathbf{s}_i)\mid\mathbf W_{-i}\}.
+$$
+
+**Key Point:** Only the observation at $\mathbf{s}_i$ contributes a likelihood term involving $w(\mathbf{s}_i)$ because the observations are conditionally independent given the random effects.
+
+## Step 2: Likelihood Contribution
+
+Let:
+
+$$
+d_i = \mathbf{x}^{T}(\mathbf{s}_i)\boldsymbol\beta,
+$$
+
+which is **constant with respect to $w(\mathbf{s}_i)$**. Then:
+
+$$
+\eta(\mathbf{s}_i) = d_i + w(\mathbf{s}_i).
+$$
+
+The log-likelihood contribution at location $\mathbf{s}_i$ is:
+
+$$
+\ell_{y,i}\{w(\mathbf{s}_i)\}
+= \gamma\left[
+y(\mathbf{s}_i)\{d_i+w(\mathbf{s}_i)\}
+-\psi\{d_i+w(\mathbf{s}_i)\}
+\right] + C.
+$$
+
+### First and Second Derivatives
+
+First derivative:
+
+$$
+\frac{\partial}{\partial w(\mathbf{s}_i)}
+\ell_{y,i}\{w(\mathbf{s}_i)\}
+= \gamma\left[
+y(\mathbf{s}_i)
+-\psi'\{d_i+w(\mathbf{s}_i)\}
+\right].
+$$
+
+Second derivative:
+
+$$
+\frac{\partial^2}{\partial w(\mathbf{s}_i)^2}
+\ell_{y,i}\{w(\mathbf{s}_i)\}
+= -\gamma\psi''\{d_i+w(\mathbf{s}_i)\}
+< 0.
+$$
+
+## Step 3: Prior Contribution
+
+The Gaussian process prior $\mathbf W \sim N_n\{\mathbf{0},\sigma^2\mathbf{H}(\phi)\}$ implies a **univariate normal conditional distribution**:
+
+$$
+w(\mathbf{s}_i)\mid\mathbf W_{-i}
+\sim N(\mu_{i\mid-i}, v_{i\mid-i}),
+$$
+
+where $\mu_{i\mid-i}$ is the conditional mean and $v_{i\mid-i} > 0$ is the conditional variance.
+
+**Why?** For any multivariate normal distribution, the conditional distribution of one component given the others is normal.
+
+Therefore:
+
+$$
+\log p\{w(\mathbf{s}_i)\mid\mathbf W_{-i}\}
+= -\frac{\{w(\mathbf{s}_i)-\mu_{i\mid-i}\}^2}{2v_{i\mid-i}} + C.
+$$
+
+### First and Second Derivatives
+
+First derivative:
+
+$$
+\frac{\partial}{\partial w(\mathbf{s}_i)}
+\log p\{w(\mathbf{s}_i)\mid\mathbf W_{-i}\}
+= -\frac{w(\mathbf{s}_i)-\mu_{i\mid-i}}{v_{i\mid-i}}.
+$$
+
+Second derivative:
+
+$$
+\frac{\partial^2}{\partial w(\mathbf{s}_i)^2}
+\log p\{w(\mathbf{s}_i)\mid\mathbf W_{-i}\}
+= -\frac{1}{v_{i\mid-i}} < 0.
+$$
+
+## Step 4: Combine Contributions
+
+The log-full conditional density (up to additive constants) is:
+
+$$
+\ell\{w(\mathbf{s}_i)\}
+=
+\underbrace{\gamma\left[
+y(\mathbf{s}_i)\{d_i+w(\mathbf{s}_i)\}
+-\psi\{d_i+w(\mathbf{s}_i)\}
+\right]}_{\text{Likelihood}}
+-
+\underbrace{\frac{\{w(\mathbf{s}_i)-\mu_{i\mid-i}\}^2}{2v_{i\mid-i}}}_{\text{Prior}}
++ C.
+$$
+
+The second derivative is:
+
+$$
+\ell''\{w(\mathbf{s}_i)\}
+=
+\underbrace{-\gamma\psi''\{d_i+w(\mathbf{s}_i)\}}_{< 0}
+-
+\underbrace{\frac{1}{v_{i\mid-i}}}_{< 0}
+< 0.
+$$
+
+**Conclusion:** $\ell\{w(\mathbf{s}_i)\}$ is strictly concave for all $w(\mathbf{s}_i)$, so the full conditional distribution $p\{w(\mathbf{s}_i)\mid\boldsymbol\beta,\mathbf W_{-i},\gamma,\mathbf y\}$ is **log-concave**.
+
+# Summary of Results
+
+| Component | Log-Full Conditional | Second Derivative | Log-Concave? |
+|-----------|---------------------|-------------------|--------------|
+| $\beta_j$ | $\ell(\beta_j) = \gamma\sum_i [y(s_i)(x_j(s_i)\beta_j+c_i) - \psi(x_j(s_i)\beta_j+c_i)] - \frac{1}{2}(\boldsymbol\beta-\boldsymbol\mu)^T\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)$ | $-\gamma\sum_i \psi''(\cdot)x_j(s_i)^2 - Q_{jj} < 0$ | ✅ Yes |
+| $w(s_i)$ | $\ell(w(s_i)) = \gamma[y(s_i)(d_i+w(s_i)) - \psi(d_i+w(s_i))] - \frac{(w(s_i)-\mu_{i\mid-i})^2}{2v_{i\mid-i}}$ | $-\gamma\psi''(\cdot) - v_{i\mid-i}^{-1} < 0$ | ✅ Yes |
+
+# Discussion
+
+## Why Log-Concavity Matters
+
+The log-concavity property is important for computational efficiency because:
+
+1. **Unimodality:** The full conditional distributions are unimodal, ensuring MCMC chains can more easily converge to the target distribution.
+
+2. **Efficient Sampling:** Log-concave distributions can be sampled using **adaptive rejection sampling** (ARS), which is often more efficient than Metropolis-Hastings.
+
+3. **Faster Convergence:** The smooth, concave log-density allows gradient-based methods (like Hamiltonian Monte Carlo) to perform well.
+
+## Key Assumptions
+
+The proofs rely on several key assumptions:
+
+1. **Regular Exponential Family:** $\psi(\eta)$ is strictly convex, so $\psi''(\eta) > 0$. This holds for common distributions like Normal, Poisson, Binomial, and Gamma.
+
+2. **Proper Prior:** $\boldsymbol\Sigma$ is positive definite, so $Q_{jj} > 0$. This ensures the prior contributes to strict concavity.
+
+3. **Positive Dispersion:** $\gamma > 0$, which is true for all standard GLMs.
+
+4. **Gaussian Process Prior:** The conditional distribution $w(s_i)|w_{-i}$ is normal with positive variance, ensuring the prior term is strictly concave.
+
+## Limitations
+
+These results hold for the **identity link** function. For non-canonical links, the derivations would need to be modified, and log-concavity may not always hold.
+
+# References
+
+1. Banerjee, S., Carlin, B. P., & Gelfand, A. E. (2014). *Hierarchical Modeling and Analysis for Spatial Data*. CRC Press.
+
+2. Diggle, P. J., & Ribeiro, P. J. (2007). *Model-based Geostatistics*. Springer.
+
+3. Gilks, W. R., & Wild, P. (1992). Adaptive rejection sampling for Gibbs sampling. *Journal of the Royal Statistical Society: Series C*, 41(2), 337-348.

@@ -1,0 +1,462 @@
+---
+title: "Derivation of the Posterior Predictive Distribution in Equation (6.19)"
+output:
+  html_document:
+    css: styles.css
+    toc: true
+    toc_float: true
+---
+
+# Problem
+
+Derive the form of
+
+$$
+p(y_0\mid \mathbf y,X,\mathbf x_0)
+$$
+
+in equation (6.19), using the usual conditional-normal formulae.
+
+# Conditional distribution of a partitioned normal vector
+
+Given the joint normal distribution
+
+$$
+\begin{pmatrix}
+\mathbf Y_1\\
+\mathbf Y_2
+\end{pmatrix}
+\sim
+N\left[
+\begin{pmatrix}
+\boldsymbol\mu_1\\
+\boldsymbol\mu_2
+\end{pmatrix},
+\begin{pmatrix}
+\Sigma_{11} & \Sigma_{12}\\
+\Sigma_{21} & \Sigma_{22}
+\end{pmatrix}
+\right],
+$$
+
+the conditional distribution is
+
+$$
+\mathbf Y_2\mid \mathbf Y_1
+\sim
+N(\boldsymbol\mu_{2\cdot1},\Sigma_{2\cdot1}),
+$$
+
+where
+
+$$
+\boldsymbol\mu_{2\cdot1}
+=
+\boldsymbol\mu_2
++\Sigma_{21}\Sigma_{11}^{-1}
+(\mathbf Y_1-\boldsymbol\mu_1)
+$$
+
+and
+
+$$
+\Sigma_{2\cdot1}
+=
+\Sigma_{22}
+-\Sigma_{21}\Sigma_{11}^{-1}\Sigma_{12}.
+$$
+
+# Spatial regression model
+
+Consider the spatial model
+
+$$
+Y(\mathbf s)
+=
+\mathbf x(\mathbf s)^T\boldsymbol\beta
++W(\mathbf s)+\epsilon(\mathbf s),
+$$
+
+where
+
+$$
+\mathbf W\sim N\{\mathbf 0,\sigma^2H(\phi)\},
+\qquad
+\boldsymbol\epsilon\sim N(\mathbf 0,\tau^2I_n),
+$$
+
+and the spatial effects and measurement errors are independent. Let
+
+$$
+\boldsymbol\theta
+=
+(\boldsymbol\beta,\sigma^2,\tau^2,\phi).
+$$
+
+For the observations at locations
+$\mathbf s_1,\ldots,\mathbf s_n$,
+
+$$
+\mathbf y\mid\boldsymbol\theta,X
+\sim
+N_n \left(
+X\boldsymbol\beta,
+\sigma^2H(\phi)+\tau^2I_n
+\right).
+$$
+
+We wish to predict
+
+$$
+Y_0=Y(\mathbf s_0)
+$$
+
+at a new location $\mathbf s_0$ with covariate vector $\mathbf x_0$.
+
+# Joint distribution of $\mathbf y$ and $Y_0$
+
+Define the spatial correlation vector
+
+$$
+\mathbf h_0(\phi)
+=
+\begin{pmatrix}
+\operatorname{Cor}\{W(\mathbf s_1),W(\mathbf s_0)\}\\
+\vdots\\
+\operatorname{Cor}\{W(\mathbf s_n),W(\mathbf s_0)\}
+\end{pmatrix}.
+$$
+
+For an exponential correlation function,
+
+$$
+[\mathbf h_0(\phi)]_i
+=
+\exp\{-\phi\lVert\mathbf s_i-\mathbf s_0\rVert\}.
+$$
+
+Conditional on $\boldsymbol\theta$,
+
+$$
+E(\mathbf y\mid\boldsymbol\theta)=X\boldsymbol\beta,
+\qquad
+E(Y_0\mid\boldsymbol\theta)=\mathbf x_0^T\boldsymbol\beta,
+$$
+
+and
+
+$$
+\operatorname{Var}(\mathbf y\mid\boldsymbol\theta)
+=
+\sigma^2H(\phi)+\tau^2I_n.
+$$
+
+If $Y_0$ represents a new noisy observation, then
+
+$$
+\operatorname{Var}(Y_0\mid\boldsymbol\theta)
+=
+\sigma^2+\tau^2.
+$$
+
+Because measurement errors at distinct locations are independent,
+
+$$
+\operatorname{Cov}(\mathbf y,Y_0\mid\boldsymbol\theta)
+=
+\sigma^2\mathbf h_0(\phi),
+$$
+
+and
+
+$$
+\operatorname{Cov}(Y_0,\mathbf y\mid\boldsymbol\theta)
+=
+\sigma^2\mathbf h_0(\phi)^T.
+$$
+
+Therefore,
+
+$$
+\begin{pmatrix}
+\mathbf y\\
+Y_0
+\end{pmatrix}
+\bigg|\boldsymbol\theta,X,\mathbf x_0
+\sim
+N\left[
+\begin{pmatrix}
+X\boldsymbol\beta\\
+\mathbf x_0^T\boldsymbol\beta
+\end{pmatrix},
+\begin{pmatrix}
+\sigma^2H(\phi)+\tau^2I_n & \sigma^2\mathbf h_0(\phi)\\
+\sigma^2\mathbf h_0(\phi)^T & \sigma^2+\tau^2
+\end{pmatrix}
+\right].
+$$
+
+# Why the order in the covariance matters
+
+For random vectors $A$ and $B$,
+
+$$
+\operatorname{Cov}(A,B)
+=
+E\left[(A-EA)(B-EB)^T\right].
+$$
+
+Consequently,
+
+$$
+\operatorname{Cov}(B,A)
+=
+\operatorname{Cov}(A,B)^T.
+$$
+
+Here, $Y_0$ is a scalar and $\mathbf y$ is an $n\times1$ column vector. Thus,
+
+$$
+\boxed{
+\operatorname{Cov}(Y_0,\mathbf y\mid\boldsymbol\theta)
+=
+\sigma^2\mathbf h_0(\phi)^T
+}
+$$
+
+is a $1\times n$ row vector, whereas
+
+$$
+\boxed{
+\operatorname{Cov}(\mathbf y,Y_0\mid\boldsymbol\theta)
+=
+\sigma^2\mathbf h_0(\phi)
+}
+$$
+
+is an $n\times1$ column vector. They contain the same covariance values, but one is the transpose of the other.
+
+This orientation is required in the conditional-normal formula. Taking
+$\mathbf Y_1=\mathbf y$ and $Y_2=Y_0$ gives
+
+$$
+\Sigma_{21}
+=
+\operatorname{Cov}(Y_0,\mathbf y\mid\boldsymbol\theta)
+$$
+
+and
+
+$$
+\Sigma_{12}
+=
+\operatorname{Cov}(\mathbf y,Y_0\mid\boldsymbol\theta).
+$$
+
+The dimensions in the conditional mean are
+
+$$
+\underbrace{\Sigma_{21}}_{1\times n}
+\underbrace{\Sigma_{11}^{-1}}_{n\times n}
+\underbrace{(\mathbf y-\boldsymbol\mu_1)}_{n\times1},
+$$
+
+which produce a scalar. Similarly,
+
+$$
+\underbrace{\Sigma_{21}}_{1\times n}
+\underbrace{\Sigma_{11}^{-1}}_{n\times n}
+\underbrace{\Sigma_{12}}_{n\times1}
+$$
+
+is a scalar, as required for the conditional variance of $Y_0$.
+
+# Stage 1: Conditional prediction for fixed $\boldsymbol\theta$
+
+Match the spatial model to the partitioned-normal notation:
+
+$$
+\begin{aligned}
+\mathbf Y_1&=\mathbf y,
+&Y_2&=Y_0,\\
+\boldsymbol\mu_1&=X\boldsymbol\beta,
+&\mu_2&=\mathbf x_0^T\boldsymbol\beta,\\
+\Sigma_{11}&=\sigma^2H(\phi)+\tau^2I_n,
+&\Sigma_{22}&=\sigma^2+\tau^2,\\
+\Sigma_{12}&=\sigma^2\mathbf h_0(\phi),
+&\Sigma_{21}&=\sigma^2\mathbf h_0(\phi)^T.
+\end{aligned}
+$$
+
+Applying the conditional-normal formula gives
+
+$$
+Y_0\mid\mathbf y,\boldsymbol\theta,\mathbf x_0
+\sim
+N\{m_0(\boldsymbol\theta),v_0(\boldsymbol\theta)\},
+$$
+
+where
+
+$$
+\boxed{
+m_0(\boldsymbol\theta)
+=
+\mathbf x_0^T\boldsymbol\beta
++\sigma^2\mathbf h_0(\phi)^T
+\{\sigma^2H(\phi)+\tau^2I_n\}^{-1}
+(\mathbf y-X\boldsymbol\beta)
+}
+$$
+
+and
+
+$$
+\boxed{
+v_0(\boldsymbol\theta)
+=
+\sigma^2+\tau^2
+-\sigma^4\mathbf h_0(\phi)^T
+\{\sigma^2H(\phi)+\tau^2I_n\}^{-1}
+\mathbf h_0(\phi)
+}.
+$$
+
+The term $\sigma^4$ arises because
+
+$$
+(\sigma^2\mathbf h_0^T)
+\Sigma_{11}^{-1}
+(\sigma^2\mathbf h_0)
+=
+\sigma^4\mathbf h_0^T\Sigma_{11}^{-1}\mathbf h_0.
+$$
+
+# Stage 2: Integrate over posterior uncertainty in $\boldsymbol\theta$
+
+The distribution derived above treats $\boldsymbol\theta$ as fixed. The posterior predictive distribution in equation (6.19) must also incorporate uncertainty about $\boldsymbol\theta$. By the law of total probability,
+
+$$
+p(y_0\mid\mathbf y,X,\mathbf x_0)
+=
+\int
+p(y_0\mid\mathbf y,\boldsymbol\theta,\mathbf x_0)
+p(\boldsymbol\theta\mid\mathbf y,X)
+\,d\boldsymbol\theta.
+$$
+
+Suppose MCMC provides $G$ draws
+
+$$
+\boldsymbol\theta^{(1)},\ldots,\boldsymbol\theta^{(G)}
+\sim
+p(\boldsymbol\theta\mid\mathbf y,X).
+$$
+
+Monte Carlo integration approximates the posterior integral by
+
+$$
+\boxed{
+p(y_0\mid\mathbf y,X,\mathbf x_0)
+\approx
+\frac{1}{G}\sum_{g=1}^{G}
+p(y_0\mid\mathbf y,\boldsymbol\theta^{(g)},\mathbf x_0)
+}
+$$
+
+which is equation (6.19).
+
+For draw $g$, define
+
+$$
+\boldsymbol\theta^{(g)}
+=
+\left(
+\boldsymbol\beta^{(g)},
+\sigma^{2(g)},
+\tau^{2(g)},
+\phi^{(g)}
+\right).
+$$
+
+Then
+
+$$
+p(y_0\mid\mathbf y,\boldsymbol\theta^{(g)},\mathbf x_0)
+=
+N\{y_0;m_0^{(g)},v_0^{(g)}\},
+$$
+
+where
+
+$$
+\begin{aligned}
+m_0^{(g)}
+={}&
+\mathbf x_0^T\boldsymbol\beta^{(g)}\\
+&+\sigma^{2(g)}\mathbf h_0\{\phi^{(g)}\}^T
+\left[
+\sigma^{2(g)}H\{\phi^{(g)}\}
++\tau^{2(g)}I_n
+\right]^{-1}
+(\mathbf y-X\boldsymbol\beta^{(g)})
+\end{aligned}
+$$
+
+and
+
+$$
+\begin{aligned}
+v_0^{(g)}
+={}&
+\sigma^{2(g)}+\tau^{2(g)}\\
+&-\{\sigma^{2(g)}\}^2
+\mathbf h_0\{\phi^{(g)}\}^T
+\left[
+\sigma^{2(g)}H\{\phi^{(g)}\}
++\tau^{2(g)}I_n
+\right]^{-1}
+\mathbf h_0\{\phi^{(g)}\}.
+\end{aligned}
+$$
+
+Therefore, equation (6.19) can be written as
+
+$$
+\boxed{
+p(y_0\mid\mathbf y,X,\mathbf x_0)
+\approx
+\frac{1}{G}\sum_{g=1}^{G}
+N\{y_0;m_0^{(g)},v_0^{(g)}\}
+}.
+$$
+
+# Interpretation
+
+Equation (6.19) is generally a **mixture of normal distributions**, rather than one normal distribution:
+
+1. For each posterior draw $\boldsymbol\theta^{(g)}$, the conditional-normal formula supplies one normal predictive distribution.
+2. Averaging these $G$ normal densities accounts for posterior uncertainty in the model parameters.
+3. The within-component variance $v_0^{(g)}$ represents predictive uncertainty conditional on $\boldsymbol\theta^{(g)}$.
+4. Variation in $m_0^{(g)}$ and $v_0^{(g)}$ across draws represents parameter uncertainty.
+
+Thus, the conditional-normal calculation supplies each term on the right-hand side of equation (6.19), while Monte Carlo averaging over the posterior draws produces the complete posterior predictive distribution.
+
+# Note on predicting the latent spatial surface
+
+The result above predicts a new noisy observation $Y_0$, so its marginal variance contains $\sigma^2+\tau^2$. If the target is instead the latent mean
+
+$$
+\eta_0=\mathbf x_0^T\boldsymbol\beta+W(\mathbf s_0),
+$$
+
+then replace $\Sigma_{22}=\sigma^2+\tau^2$ by $\Sigma_{22}=\sigma^2$. The conditional mean remains unchanged, but the conditional variance becomes
+
+$$
+\operatorname{Var}(\eta_0\mid\mathbf y,\boldsymbol\theta)
+=
+\sigma^2
+-\sigma^4\mathbf h_0(\phi)^T
+\{\sigma^2H(\phi)+\tau^2I_n\}^{-1}
+\mathbf h_0(\phi).
+$$
