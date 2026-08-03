@@ -1,6 +1,5 @@
 ---
 title: "Log-Concavity of Full Conditional Distributions in Spatial GLMMs"
-author: "Your Name"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -95,30 +94,175 @@ $$
 The prior terms involving $\mathbf W$ and $\gamma$ are absorbed into the
 proportionality constant because they do not depend on $\beta_j$.
 
-## Step 2: Write $\eta(\mathbf{s}_i)$ in Terms of $\beta_j$
+## Step 2: Detailed Derivation of the Log-Full Conditional
 
-Since $\eta(\mathbf{s}_i) = \mathbf{x}^{T}(\mathbf{s}_i)\boldsymbol\beta + w(\mathbf{s}_i)$, we can expand:
+### Starting from the Full Conditional
+
+The full conditional distribution for $\beta_j$ is:
 
 $$
-\eta(\mathbf{s}_i)
-= x_j(\mathbf{s}_i)\beta_j + \sum_{k\neq j} x_k(\mathbf{s}_i)\beta_k + w(\mathbf{s}_i).
+p(\beta_j|\boldsymbol\beta_{-j},\mathbf W,\gamma,\mathbf y) \propto p(\mathbf y|\boldsymbol\beta,\mathbf W,\gamma) \times p(\boldsymbol\beta)
+$$
+
+### Step 2.1: Write the Likelihood
+
+From equation (6.31), the full likelihood across all $n$ locations is:
+
+$$
+p(\mathbf y|\boldsymbol\beta,\mathbf W,\gamma) = \prod_{i=1}^n f(y(\mathbf{s}_i)|\boldsymbol\beta,w(\mathbf{s}_i),\gamma)
+$$
+
+Substituting the density from (6.31):
+
+$$
+p(\mathbf y|\boldsymbol\beta,\mathbf W,\gamma) = \prod_{i=1}^n h(y(\mathbf{s}_i),\gamma) \exp\{\gamma[y(\mathbf{s}_i)\eta(\mathbf{s}_i) - \psi(\eta(\mathbf{s}_i))]\}
+$$
+
+### Step 2.2: Take the Logarithm of the Likelihood
+
+Taking the natural logarithm:
+
+$$
+\log p(\mathbf y|\boldsymbol\beta,\mathbf W,\gamma) = \sum_{i=1}^n \log h(y(\mathbf{s}_i),\gamma) + \gamma\sum_{i=1}^n [y(\mathbf{s}_i)\eta(\mathbf{s}_i) - \psi(\eta(\mathbf{s}_i))]
+$$
+
+Since $\sum_{i=1}^n \log h(y(\mathbf{s}_i),\gamma)$ does **not** depend on $\beta_j$ (it depends only on the data and $\gamma$), it will be absorbed into the constant $C$.
+
+### Step 2.3: Substitute $\eta(\mathbf{s}_i)$
+
+Recall that with the identity link:
+
+$$
+\eta(\mathbf{s}_i) = \mathbf{x}^T(\mathbf{s}_i)\boldsymbol\beta + w(\mathbf{s}_i)
+$$
+
+Expanding this to isolate $\beta_j$:
+
+$$
+\eta(\mathbf{s}_i) = x_j(\mathbf{s}_i)\beta_j + \sum_{k\neq j} x_k(\mathbf{s}_i)\beta_k + w(\mathbf{s}_i)
 $$
 
 Define:
 
 $$
-c_i = \sum_{k\neq j} x_k(\mathbf{s}_i)\beta_k + w(\mathbf{s}_i),
+c_i = \sum_{k\neq j} x_k(\mathbf{s}_i)\beta_k + w(\mathbf{s}_i)
 $$
 
-which is **constant with respect to $\beta_j$**. Then:
+This $c_i$ is **constant with respect to $\beta_j$** because it does not contain $\beta_j$. Therefore:
+
+$$
+\eta(\mathbf{s}_i) = x_j(\mathbf{s}_i)\beta_j + c_i
+$$
+
+### Step 2.4: Substitute into the Log-Likelihood
+
+Now substitute $\eta(\mathbf{s}_i) = x_j(\mathbf{s}_i)\beta_j + c_i$:
+
+$$
+\begin{aligned}
+\log p(\mathbf y|\boldsymbol\beta,\mathbf W,\gamma) 
+&= \gamma\sum_{i=1}^n [y(\mathbf{s}_i)(x_j(\mathbf{s}_i)\beta_j + c_i) - \psi(x_j(\mathbf{s}_i)\beta_j + c_i)] + \text{terms not involving } \beta_j \\
+&= \gamma\sum_{i=1}^n [y(\mathbf{s}_i)x_j(\mathbf{s}_i)\beta_j + y(\mathbf{s}_i)c_i - \psi(x_j(\mathbf{s}_i)\beta_j + c_i)] + C_1
+\end{aligned}
+$$
+
+Notice that $y(\mathbf{s}_i)c_i$ does **not** depend on $\beta_j$ (since $c_i$ doesn't depend on $\beta_j$). So it gets absorbed into $C_1$.
+
+### Step 2.5: Write the Prior
+
+The prior for $\boldsymbol\beta$ is:
+
+$$
+\boldsymbol\beta \sim N_p(\boldsymbol\mu,\boldsymbol\Sigma)
+$$
+
+The probability density function (PDF) is:
+
+$$
+p(\boldsymbol\beta) = (2\pi)^{-p/2}|\boldsymbol\Sigma|^{-1/2} \exp\left\{-\frac{1}{2}(\boldsymbol\beta-\boldsymbol\mu)^T\boldsymbol\Sigma^{-1}(\boldsymbol\beta-\boldsymbol\mu)\right\}
+$$
+
+Taking the logarithm:
+
+$$
+\log p(\boldsymbol\beta) = -\frac{1}{2}(\boldsymbol\beta-\boldsymbol\mu)^T\boldsymbol\Sigma^{-1}(\boldsymbol\beta-\boldsymbol\mu) + \underbrace{-\frac{p}{2}\log(2\pi) - \frac{1}{2}\log|\boldsymbol\Sigma|}_{\text{constant with respect to } \beta_j}
+$$
+
+The constant term $-\frac{p}{2}\log(2\pi) - \frac{1}{2}\log|\boldsymbol\Sigma|$ gets absorbed into $C$.
+
+### Step 2.6: Combine to Get the Log-Full Conditional
+
+The log-full conditional (up to additive constants) is:
+
+$$
+\log p(\beta_j|\boldsymbol\beta_{-j},\mathbf W,\gamma,\mathbf y) = 
+\underbrace{\log p(\mathbf y|\boldsymbol\beta,\mathbf W,\gamma)}_{\text{Likelihood}} + 
+\underbrace{\log p(\boldsymbol\beta)}_{\text{Prior}} + \text{constant}
+$$
+
+Substituting the expressions from Steps 2.4 and 2.5:
+
+$$
+\ell(\beta_j) = 
+\gamma\sum_{i=1}^{n}
+\left[
+y(\mathbf{s}_i)\{x_j(\mathbf{s}_i)\beta_j + c_i\}
+-\psi\{x_j(\mathbf{s}_i)\beta_j + c_i\}
+\right]
+-
+\frac{1}{2}(\boldsymbol\beta-\boldsymbol\mu)^T\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)
++ C
+$$
+
+where $\mathbf Q = \boldsymbol\Sigma^{-1}$.
+
+### Step 2.7: What Gets Absorbed into the Constant $C$
+
+For clarity, here's what gets absorbed into $C$:
+
+| Term | Depends on $\beta_j$? | Where it goes |
+|:------|:----------------------|:---------------|
+| $\sum_{i=1}^n \log h(y(\mathbf{s}_i),\gamma)$ | ❌ No | Absorbed into $C$ |
+| $p(\mathbf W)$ | ❌ No | Absorbed into $C$ |
+| $p(\gamma)$ | ❌ No | Absorbed into $C$ |
+| $y(\mathbf{s}_i)c_i$ | ❌ No (since $c_i$ doesn't depend on $\beta_j$) | Absorbed into $C$ |
+| $-\frac{1}{2}\sum_{k\neq j}\sum_{l\neq j} Q_{kl}(\beta_k-\mu_k)(\beta_l-\mu_l)$ | ❌ No | Absorbed into $C$ |
+| $-\frac{p}{2}\log(2\pi) - \frac{1}{2}\log|\boldsymbol\Sigma|$ | ❌ No | Absorbed into $C$ |
+| $\gamma y(\mathbf{s}_i)x_j(\mathbf{s}_i)\beta_j$ | ✅ Yes | Kept in expression |
+| $-\gamma\psi(x_j(\mathbf{s}_i)\beta_j + c_i)$ | ✅ Yes | Kept in expression |
+| $-\frac{1}{2}Q_{jj}(\beta_j-\mu_j)^2$ | ✅ Yes | Kept in expression |
+| $-\sum_{k\neq j} Q_{jk}(\beta_j-\mu_j)(\beta_k-\mu_k)$ | ✅ Yes | Kept in expression |
+
+### Alternative Expanded Form
+
+For completeness, we can also write the log-full conditional in expanded form:
+
+$$
+\begin{aligned}
+\ell(\beta_j) = 
+&\gamma\sum_{i=1}^{n}
+\left[
+y(\mathbf{s}_i)x_j(\mathbf{s}_i)\beta_j + y(\mathbf{s}_i)c_i
+-\psi\{x_j(\mathbf{s}_i)\beta_j + c_i\}
+\right] \\
+&-\frac{1}{2}Q_{jj}(\beta_j-\mu_j)^2 
+- \sum_{k\neq j} Q_{jk}(\beta_j-\mu_j)(\beta_k-\mu_k) + C
+\end{aligned}
+$$
+
+This expanded form makes it clear which terms contribute to the derivatives.
+
+## Step 3: Write $\eta(\mathbf{s}_i)$ in Terms of $\beta_j$
+
+From above, we have:
 
 $$
 \eta(\mathbf{s}_i) = x_j(\mathbf{s}_i)\beta_j + c_i.
 $$
 
-## Step 3: Derive the Log-Full Conditional
+## Step 4: Derive the Log-Full Conditional
 
-Taking the logarithm of the full conditional (up to additive constants):
+From Step 2.6, the log-full conditional (up to additive constants) is:
 
 $$
 \ell(\beta_j) = 
@@ -147,7 +291,7 @@ $$
 -\frac{1}{2}Q_{jj}(\beta_j-\mu_j)^2 - (\beta_j-\mu_j)\sum_{k\neq j} Q_{jk}(\beta_k-\mu_k) + C.
 $$
 
-## Step 4: Compute the First Derivative
+## Step 5: Compute the First Derivative
 
 Differentiating $\ell(\beta_j)$ with respect to $\beta_j$:
 
@@ -164,7 +308,23 @@ $$
 
 where $\left[\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)\right]_j$ denotes the $j$th component of the vector $\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)$.
 
-## Step 5: Compute the Second Derivative
+### Detailed First Derivative Calculation
+
+For clarity, here's the step-by-step derivative:
+
+1. **Derivative of the likelihood term**:
+   - Derivative of $\gamma y(\mathbf{s}_i)x_j(\mathbf{s}_i)\beta_j$: $\gamma y(\mathbf{s}_i)x_j(\mathbf{s}_i)$
+   - Derivative of $-\gamma\psi(x_j(\mathbf{s}_i)\beta_j + c_i)$: $-\gamma\psi'(x_j(\mathbf{s}_i)\beta_j + c_i) \cdot x_j(\mathbf{s}_i)$
+   - Sum over $i$: $\gamma\sum_i x_j(\mathbf{s}_i)[y(\mathbf{s}_i) - \psi'(x_j(\mathbf{s}_i)\beta_j + c_i)]$
+
+2. **Derivative of the prior term**:
+   - From the expanded form: $-\frac{1}{2}Q_{jj}(\beta_j-\mu_j)^2 - \sum_{k\neq j} Q_{jk}(\beta_j-\mu_j)(\beta_k-\mu_k)$
+   - Derivative: $-Q_{jj}(\beta_j-\mu_j) - \sum_{k\neq j} Q_{jk}(\beta_k-\mu_k)$
+   - This equals $-[\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)]_j$
+
+Combining gives the first derivative above.
+
+## Step 6: Compute the Second Derivative
 
 Differentiating again:
 
@@ -176,7 +336,20 @@ $$
 - Q_{jj}.
 $$
 
-## Step 6: Establish Log-Concavity
+### Detailed Second Derivative Calculation
+
+1. **Derivative of the likelihood term**:
+   - Derivative of $\gamma x_j(\mathbf{s}_i)[y(\mathbf{s}_i) - \psi'(x_j(\mathbf{s}_i)\beta_j + c_i)]$
+   - $= -\gamma x_j(\mathbf{s}_i) \cdot \psi''(x_j(\mathbf{s}_i)\beta_j + c_i) \cdot x_j(\mathbf{s}_i)$
+   - $= -\gamma \psi''(x_j(\mathbf{s}_i)\beta_j + c_i) \cdot x_j(\mathbf{s}_i)^2$
+
+2. **Derivative of the prior term**:
+   - Derivative of $-[\mathbf Q(\boldsymbol\beta-\boldsymbol\mu)]_j$ with respect to $\beta_j$
+   - $= -Q_{jj}$
+
+Combining gives the second derivative above.
+
+## Step 7: Establish Log-Concavity
 
 For a regular exponential family, $\psi(\eta)$ is **strictly convex**, so:
 
@@ -226,25 +399,54 @@ $$
 
 ## Step 2: Likelihood Contribution
 
-Let:
+Starting from equation (6.31), the likelihood for a single observation at location $\mathbf{s}_i$ is:
+
+$$
+f\{y(\mathbf{s}_i)\mid\boldsymbol\beta,w(\mathbf{s}_i),\gamma\}
+=h\{y(\mathbf{s}_i),\gamma\}
+\exp\left(
+\gamma\left[y(\mathbf{s}_i)\eta(\mathbf{s}_i)
+-\psi\{\eta(\mathbf{s}_i)\}\right]
+\right).
+$$
+
+Taking the natural logarithm:
+
+$$
+\log f\{y(\mathbf{s}_i)\mid\boldsymbol\beta,w(\mathbf{s}_i),\gamma\}
+=
+\log h\{y(\mathbf{s}_i),\gamma\}
++
+\gamma\left[y(\mathbf{s}_i)\eta(\mathbf{s}_i)
+-\psi\{\eta(\mathbf{s}_i)\}\right].
+$$
+
+With the identity link, $\eta(\mathbf{s}_i) = \mathbf{x}^{T}(\mathbf{s}_i)\boldsymbol\beta + w(\mathbf{s}_i)$. Let:
 
 $$
 d_i = \mathbf{x}^{T}(\mathbf{s}_i)\boldsymbol\beta,
 $$
 
-which is **constant with respect to $w(\mathbf{s}_i)$**. Then:
+which is **constant with respect to $w(\mathbf{s}_i)$**. Then $\eta(\mathbf{s}_i) = d_i + w(\mathbf{s}_i)$, and:
 
 $$
-\eta(\mathbf{s}_i) = d_i + w(\mathbf{s}_i).
+\log f\{y(\mathbf{s}_i)\mid\boldsymbol\beta,w(\mathbf{s}_i),\gamma\}
+=
+\log h\{y(\mathbf{s}_i),\gamma\}
++
+\gamma\left[
+y(\mathbf{s}_i)(d_i + w(\mathbf{s}_i))
+-\psi(d_i + w(\mathbf{s}_i))
+\right].
 $$
 
-The log-likelihood contribution at location $\mathbf{s}_i$ is:
+The terms $\log h\{y(\mathbf{s}_i),\gamma\}$ and $y(\mathbf{s}_i)d_i$ do not depend on $w(\mathbf{s}_i)$ and are absorbed into the constant $C$. Thus:
 
 $$
 \ell_{y,i}\{w(\mathbf{s}_i)\}
 = \gamma\left[
-y(\mathbf{s}_i)\{d_i+w(\mathbf{s}_i)\}
--\psi\{d_i+w(\mathbf{s}_i)\}
+y(\mathbf{s}_i)(d_i + w(\mathbf{s}_i))
+-\psi(d_i + w(\mathbf{s}_i))
 \right] + C.
 $$
 
