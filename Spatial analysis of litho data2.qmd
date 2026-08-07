@@ -1,0 +1,4489 @@
+---
+title: "Spatial Analysis of Lithology Data - Idaho National Engineering Laboratory"
+format: 
+ html:
+    css: styles.css
+    toc: true
+    toc-location: left
+    
+editor: visual
+---
+
+# 1 Introduction
+
+These notes are based on an exercise from the book Hierarchical Modeling and Analysis for Spatial Data. We use the [Idaho National Engineering Laboratory lithology dataset](https://github.com/enwuliu/datasets/blob/main/lithology.dat) to demonstrate how to conduct spatial analysis using Bayesian linear regression models.
+
+First, we implement the models manually. We then analyse the data using existing R packages. We use log(Thickness) as the response variable and Surface Elevation and A–B Elevation as covariates. We fit univariate Gaussian spatial models with a nugget effect using exponential and Matérn covariance functions.
+
+# 2 Data description
+
+```{r, message=FALSE, warning=FALSE}
+# Load required packages
+library(tidyverse)
+library(mgcv)         # For GAM smoothing
+library(viridisLite)  # For color palettes
+library(fields)       # For image.plot with legend
+
+# 2. IMPORT AND CLEAN DATA ---------------------------------------------
+
+# Import the lithology dataset
+
+litho <- read.table(
+  "https://raw.githubusercontent.com/enwuliu/datasets/refs/heads/main/lithology.dat",
+  header = FALSE,
+  skip = 1,
+  col.names = c(
+    "Well_Name",
+    "Northing",
+    "Easting",
+    "Surf_Elevation",
+    "Thickness_AB",
+    "Elevation_AB",
+    "Thickness_BC",
+    "Elevation_BC",
+    "Thickness_CD",
+    "Elevation_CD",
+    "Thickness_DE"
+  ),
+  na.strings = c("NA", "N/A", "", " "),
+  fill = TRUE,
+  stringsAsFactors = FALSE
+)
+
+litho2 <- litho %>%
+  transmute(
+    Northing = as.numeric(gsub(",", "", Northing)),
+    Easting = as.numeric(gsub(",", "", Easting)),
+    Surf_Elevation = as.numeric(gsub(",", "", Surf_Elevation)),
+    Thickness = as.numeric(gsub(",", "", Thickness_AB)),
+    AB_Elevation = as.numeric(gsub(",", "", Elevation_AB))
+  ) %>%
+  drop_na() %>%
+  filter(Thickness > 0) %>%
+  mutate(
+    log_Thickness = log(Thickness),
+    Surf_Elevation_scaled = as.numeric(scale(Surf_Elevation)),
+    AB_Elevation_scaled = as.numeric(scale(AB_Elevation))
+  )
+
+model_variables <- c(
+  "Easting",
+  "Northing",
+  "log_Thickness",
+  "Surf_Elevation_scaled",
+  "AB_Elevation_scaled"
+)
+
+if (!all(vapply(litho2[model_variables], function(x) all(is.finite(x)), logical(1)))) {
+  stop("At least one model variable contains NA, NaN or Inf after cleaning.")
+}
+
+
+head(litho2)
+summary(litho2)
+
+
+```
+
+# 3 Plot covariates and response
+
+```{r}
+# 3. GAM-BASED PLOTTING FUNCTION ----------------------------------------
+
+plot_lithology_gam <- function(data, variable, plot_title, 
+                               show_points = TRUE, 
+                               n_contours = 10,
+                               grid_size = 150,
+                               color_palette = viridis,
+                               k_smooth = 20) {
+  
+  # Extract the variable to model
+  z <- data[[variable]]
+  
+  # Fit GAM with thin plate regression splines
+  # k controls the maximum degrees of freedom (smoothness)
+  formula <- as.formula(paste(variable, "~ s(Northing, Easting, k =", k_smooth, ")"))
+  gam_model <- gam(formula, data = data)
+  
+  # Create prediction grid
+  northing_range <- seq(min(data$Northing), max(data$Northing), length.out = grid_size)
+  easting_range <- seq(min(data$Easting), max(data$Easting), length.out = grid_size)
+  
+  # Expand grid for prediction
+  pred_grid <- expand.grid(
+    Northing = northing_range,
+    Easting = easting_range
+  )
+  
+  # Predict on the grid
+  pred_grid$value <- predict(gam_model, newdata = pred_grid, type = "response")
+  
+  # Convert to matrix format for image/contour functions
+  # Note: image() expects x = columns, y = rows, so we need to reshape
+  value_matrix <- matrix(pred_grid$value, 
+                         nrow = length(easting_range), 
+                         ncol = length(northing_range),
+                         byrow = FALSE)
+  
+  # Calculate proper aspect ratio
+  asp_ratio <- diff(range(data$Northing)) / diff(range(data$Easting))
+  
+  # Determine z range for consistent color scaling
+  zlim <- range(pred_grid$value, na.rm = TRUE)
+  
+  # Create the image plot with legend using fields package
+  if (requireNamespace("fields", quietly = TRUE)) {
+    # Plot with color legend
+    fields::image.plot(
+      x = easting_range,
+      y = northing_range,
+      z = value_matrix,
+      col = color_palette(100),
+      xlab = "Easting (ft)",
+      ylab = "Northing (ft)",
+      main = plot_title,
+      asp = 1/asp_ratio,
+      zlim = zlim,
+      legend.width = 1.2,
+      legend.mar = 3.5,
+      legend.args = list(text = variable, side = 4, line = 2.5, cex = 0.8)
+    )
+  } else {
+    # Fallback: plot without legend
+    image(
+      x = easting_range,
+      y = northing_range,
+      z = value_matrix,
+      col = color_palette(100),
+      xlab = "Easting (ft)",
+      ylab = "Northing (ft)",
+      main = plot_title,
+      asp = 1/asp_ratio,
+      zlim = zlim
+    )
+  }
+  
+  # Add contour lines
+  contour(
+    x = easting_range,
+    y = northing_range,
+    z = value_matrix,
+    add = TRUE,
+    drawlabels = TRUE,
+    col = "black",
+    lwd = 0.8,
+    nlevels = n_contours,
+    labcex = 0.6
+  )
+  
+  # Add observed borehole locations
+  if (show_points) {
+    points(
+      data$Easting,
+      data$Northing,
+      pch = 16,
+      cex = 0.4,
+      col = adjustcolor("white", alpha.f = 0.6)
+    )
+  }
+  
+  box()
+  
+  # Return the model and predictions for further analysis
+  invisible(list(
+    model = gam_model,
+    grid = pred_grid,
+    matrix = value_matrix,
+    x = easting_range,
+    y = northing_range,
+    zlim = zlim
+  ))
+}
+
+```
+
+## Plot 1: A-B Thickness
+
+```{r, message=FALSE,warning=FALSE}
+
+result_thickness <- plot_lithology_gam(
+  data = litho2,
+  variable = "Thickness",
+  plot_title = "A-B Thickness",
+  n_contours = 10,
+  grid_size = 150,
+  color_palette = viridis,
+  k_smooth = 20
+)
+
+# Plot 2: Surface Elevation
+result_surface <- plot_lithology_gam(
+  data = litho2,
+  variable = "Surf_Elevation",
+  plot_title = "Surface Elevation",
+  n_contours = 10,
+  grid_size = 150,
+  color_palette = viridis,
+  k_smooth = 20
+)
+
+# Plot 3: A-B Elevation
+result_ab <- plot_lithology_gam(
+  data = litho2,
+  variable = "AB_Elevation",
+  plot_title = "A-B Elevation",
+  n_contours = 10,
+  grid_size = 150,
+  color_palette = viridis,
+  k_smooth = 20
+)
+
+```
+
+# 4 Exploratory data analysis
+
+## 4.1 variable description
+
+```{r, message=FALSE, warning=FALSE}
+hist(
+  litho2$Thickness,
+  main = "Thickness",
+  xlab = "Thickness",
+  col = "lightblue",
+  border = "white"
+)
+
+hist(
+  litho2$log_Thickness,
+  main = "Log thickness",
+  xlab = "Log(Thickness)",
+  col = "lightgreen",
+  border = "white"
+)
+
+plot(
+  litho2$Surf_Elevation,
+  litho2$log_Thickness,
+  xlab = "Surface elevation",
+  ylab = "Log(Thickness)",
+  main = "Surface elevation vs log thickness",
+  pch = 19,
+  col = "steelblue"
+)
+
+plot(
+  litho2$AB_Elevation,
+  litho2$log_Thickness,
+  xlab = "A-B elevation",
+  ylab = "Log(Thickness)",
+  main = "A-B elevation vs log thickness",
+  pch = 19,
+  col = "steelblue"
+)
+
+colour_group <- cut(
+  litho2$log_Thickness,
+  breaks = 10,
+  include.lowest = TRUE
+)
+
+point_colours <- hcl.colors(10, palette = "YlOrRd")[colour_group]
+
+plot(
+  litho2$Easting,
+  litho2$Northing,
+  pch = 19,
+  col = point_colours,
+  cex = 0.8 +
+    1.8 *
+      (litho2$log_Thickness - min(litho2$log_Thickness)) /
+      diff(range(litho2$log_Thickness)),
+  asp = 1,
+  xlab = "Easting",
+  ylab = "Northing",
+  main = "Spatial distribution of log thickness"
+)
+
+boxplot(
+  litho2$log_Thickness,
+  ylab = "Log(Thickness)",
+  main = "Log thickness",
+  col = "wheat"
+)
+
+```
+
+## 4.1 Empirical variogram of the raw response
+
+```{r, message=FALSE, warning=FALSE}
+
+geo_data <- geoR::as.geodata(
+  litho2,
+  coords.col = match(c("Easting", "Northing"), names(litho2)),
+  data.col = match("log_Thickness", names(litho2)),
+  covar.col = match(
+    c("Surf_Elevation", "AB_Elevation"),
+    names(litho2)
+  )
+)
+
+maximum_distance <- max(
+  dist(litho2[, c("Easting", "Northing")])
+) * 0.60
+
+variog_raw <- geoR::variog(
+  geo_data,
+  max.dist = maximum_distance
+)
+
+plot(
+  variog_raw,
+  main = "Empirical variogram of log thickness"
+)
+```
+
+## 4.2 NON-SPATIAL LINEAR MODEL
+
+```{r, message=FALSE, warning=FALSE}
+
+lm_model <- lm(
+  log_Thickness ~ Surf_Elevation_scaled + AB_Elevation_scaled,
+  data = litho2
+)
+
+print(summary(lm_model))
+```
+
+## 4.3 A residual variogram is more appropriate when covariate trends are present.
+
+```{r, message=FALSE, warning=FALSE}
+
+residual_data <- data.frame(
+  Easting = litho2$Easting,
+  Northing = litho2$Northing,
+  residual = residuals(lm_model)
+)
+
+geo_residuals <- geoR::as.geodata(
+  residual_data,
+  coords.col = 1:2,
+  data.col = 3
+)
+
+variog_residuals <- geoR::variog(
+  geo_residuals,
+  max.dist = maximum_distance
+)
+
+plot(
+  variog_residuals,
+  main = "Variogram of non-spatial model residuals"
+)
+
+```
+
+# 5 The linear spatial model
+
+The model assumes:
+
+$$Y = X\beta + W + \varepsilon$$
+
+Where:
+
+- $Y$: Response variable ($n \times 1$)
+- $X$: Design matrix ($n \times p$) of covariates
+- $\beta$: Regression coefficients ($p \times 1$)
+- $W$: Spatial random effects ($n \times 1$) with $W \sim \mathcal{MVN}(0, \sigma^2 R(\phi))$
+- $\varepsilon$: Independent errors with $\varepsilon \sim \mathcal{MVN}(0, \tau^2 I)$
+
+
+This is the hierarchy of spatial model
+
+
+
+- Level 1: DATA MODEL (Likelihood)
+
+$$
+Y(s) = X(s)\boldsymbol{\beta} + W(s) + \varepsilon(s)
+$$
+
+$$
+\varepsilon(s) \sim N(0, \tau^2)
+$$
+
+This is what we observe.
+
+- Level 2: PROCESS MODEL (Prior for $W$)
+
+$$
+W(s) \sim \operatorname{GP}\left(0, \sigma^2 R(\phi)\right)
+$$
+
+This is the underlying spatial process.
+
+- Level 3: PARAMETER MODEL (Hyperpriors)
+
+$$
+\sigma^2 \sim \operatorname{IG}(a_\sigma, b_\sigma)
+$$
+
+$$
+\phi \sim \operatorname{Gamma}(a_\phi, b_\phi)
+$$
+
+This is what we don't know.
+
+
+## 5.1 Spatial Correlation Functions
+
+The spatial correlation matrix $R(\phi)$ depends on the distance between locations:
+
+### Exponential Correlation:
+
+$$R(\phi)_{ij} = \exp\left(-\frac{d_{ij}}{\phi}\right)$$
+
+### Matérn Correlation (with $\kappa = 1.5$):
+
+$$R(\phi)_{ij} = \left(1 + \frac{d_{ij}}{\phi}\right) \exp\left(-\frac{d_{ij}}{\phi}\right)$$
+
+Where $d_{ij}$ is the distance between locations $i$ and $j$, and $\phi$ is the spatial range parameter.
+
+# 6 Prior Distributions
+
+The function uses conjugate priors:
+
+## Regression Coefficients ($\beta$)
+
+$$\beta \sim \mathcal{MVN}(\beta_{\text{mean}}, \beta_{\text{var}} \cdot I)$$ Where $\beta_{\text{mean}} = 0$ and $\beta_{\text{var}} = 1000$ (vague prior)
+
+## Spatial Variance ($\sigma^2$)
+
+$$\sigma^2 \sim \text{Inverse-Gamma}(\alpha_{\sigma} = 2, \beta_{\sigma} = 1)$$
+
+## Error Variance ($\tau^2$)
+
+$$\tau^2 \sim \text{Inverse-Gamma}(\alpha_{\tau} = 2, \beta_{\tau} = 1)$$
+
+## Spatial Range ($\phi$)
+
+$$\phi \sim \text{Gamma}(\alpha_{\phi} = 2, \beta_{\phi} = 1)$$
+
+# 7 Helper functions
+
+## 7.1 The rmvn_precision\` Function
+
+```{r, eval=FALSE}
+rmvn_precision <- function(precision, linear_term) {
+# precision: = Q (posterior precision)
+
+#   linear_term:b = coefficient of β in the linear term of log-posterior
+#   = XᵀY/σ² + P₀μ₀
+#   = evidence from data + evidence from prior
+# 
+# This b is NOT the regression coefficient β itself,
+# but rather the COEFFICIENT that multiplies β in the log-posterior
+#   
+  
+  U <- chol(precision)
+  # This gives μ = Q⁻¹b (mean of the coefficients β), for cholesky we use forward and backward two steps to solve this equation for μ
+  posterior_mean <- backsolve(U, forwardsolve(t(U), linear_term))
+  
+ 
+  # This generates random β ~ N(μ, Q⁻¹)
+  random_part <- backsolve(U, rnorm(length(linear_term)))
+  
+   # Each sample is a draw of β (the regression coefficients!)
+  as.numeric(posterior_mean + random_part)
+```
+
+This function samples from a multivariate normal distribution parameterized by its **precision matrix** (inverse covariance matrix):
+
+$$X \sim \mathcal{N}(Q^{-1}b, Q^{-1})$$ Note: this function can also be used for any other parameter whose posterior has the precision-form normal distribution
+
+$$\theta \mid -\sim N(Q^{-1}\mathbf{b}, Q^{-1})$$ including spatial random effect $w$ when its full conditional is expressed in this form.
+
+## 7.2 Bayesian Linear Regression Model
+
+For the Bayesian linear regression model, assume the following prior distribution:
+
+$$\boldsymbol{\beta}
+\sim
+N\left(\boldsymbol{\mu}_0,\mathbf{P}_0^{-1}\right),$$
+
+where $\mathbf{P}_0$ is the prior precision matrix.
+
+The likelihood is:
+
+$$\mathbf{Y}\mid\boldsymbol{\beta}
+\sim
+N\left(\mathbf{X}\boldsymbol{\beta},\sigma^2\mathbf{I}\right).$$
+
+The posterior distribution is:
+
+$$\boldsymbol{\beta}\mid\mathbf{Y}
+\sim
+N\left(\mathbf{Q}^{-1}\mathbf{b},\mathbf{Q}^{-1}\right),$$
+
+where
+
+$$\mathbf{Q}
+=
+\frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\sigma^2}
++\mathbf{P}_0$$
+
+is the **posterior precision matrix**, and
+
+$$\mathbf{b}
+=
+\frac{\mathbf{X}^{\mathsf T}\mathbf{Y}}{\sigma^2}
++\mathbf{P}_0\boldsymbol{\mu}_0$$
+
+is the **posterior linear term**.
+
+Therefore, the posterior mean and covariance matrix are:
+
+$$E\left(\boldsymbol{\beta}\mid\mathbf{Y}\right)
+=\mathbf{Q}^{-1}\mathbf{b},
+\qquad
+\operatorname{Var}\left(\boldsymbol{\beta}\mid\mathbf{Y}\right)
+=\mathbf{Q}^{-1}.$$
+
+## 7.3 Understanding Cholesky factorization
+
+```{r, eval=FALSE}
+posterior_mean <- backsolve(U, forwardsolve(t(U), linear_term))
+```
+
+This single line of code solves the linear system
+
+$$\mathbf{Q}\boldsymbol{\mu}=\mathbf{b}$$
+
+for $\boldsymbol{\mu}$ using Cholesky factorization, where:
+
+$$\mathbf{Q}=\mathbf{U}^{\mathsf T}\mathbf{U}$$
+
+is the precision matrix,
+
+$$\mathbf{b} = \mathtt{linear\_term}$$
+
+is the posterior linear term, and
+
+$$\boldsymbol{\mu}=\mathtt{posterior\_mean}$$
+
+is the quantity we want to calculate.
+
+### 7.3.1 Mathematical Goal
+
+We want to solve:
+
+$$\mathbf{Q}\boldsymbol{\mu}=\mathbf{b}.$$
+
+Substituting $\mathbf{Q}=\mathbf{U}^{\mathsf T}\mathbf{U}$ gives:
+
+$$\mathbf{U}^{\mathsf T}\mathbf{U}\boldsymbol{\mu}=\mathbf{b}.$$
+
+### 7.3.2 Two-Step Solution Strategy
+
+Instead of explicitly calculating $\mathbf{Q}^{-1}$, we use two triangular solves.
+
+#### Step 1: Solve for $\mathbf{z}$
+
+Solve
+
+$$\mathbf{U}^{\mathsf T}\mathbf{z}=\mathbf{b}$$
+
+for $\mathbf{z}$:
+
+```{r, eval=FALSE}
+z <- forwardsolve(t(U), linear_term)
+```
+
+Because $\mathbf{U}$ is upper triangular, $\mathbf{U}^{\mathsf T}$ is lower triangular, so `forwardsolve()` is used.
+
+#### Step 2: Solve for $\boldsymbol{\mu}$
+
+Solve
+
+$$\mathbf{U}\boldsymbol{\mu}=\mathbf{z}$$
+
+for $\boldsymbol{\mu}$:
+
+```{r, eval=FALSE}
+posterior_mean <- backsolve(U, z)
+```
+
+Because $\mathbf{U}$ is upper triangular, `backsolve()` is used.
+
+#### Combined into One Line
+
+The two steps can be combined as:
+
+```{r, eval=FALSE}
+posterior_mean <- backsolve(
+  U,
+  forwardsolve(t(U), linear_term)
+)
+```
+
+Therefore,
+
+$$\boldsymbol{\mu}
+=\mathbf{U}^{-1}\mathbf{U}^{-\mathsf T}\mathbf{b}
+=\mathbf{Q}^{-1}\mathbf{b}.$$
+
+This approach is more numerically stable and efficient than explicitly calculating $\mathbf{Q}^{-1}$.
+
+Of course we can solve the equation without Cholesky, but it will be expensive.
+
+```{r, eval=FALSE}
+posterior_mean <- solve(Q, b)  # O(n³) - expensive!
+```
+
+## 7.4 Another helper function.
+
+This function is quite simple. It is used to calculate the spatial correlation matrix using either the exponential or Matérn correlation ($\kappa=1.5$) function.
+
+```{r, eval=FALSE}
+ #  Spatial correlation matrix
+  make_correlation <- function(phi) {
+    if (!is.finite(phi) || phi <= 0) {
+      stop("phi must be positive and finite.")
+    }
+
+    if (cov_family == "exponential") {
+      R <- exp(-distance_matrix / phi)
+    } else if (cov_family == "matern") {
+      R <- geoR::matern(
+        distance_matrix,
+        phi = phi,
+        kappa = 1.5
+      )
+    } else {
+      stop("Use cov_family = 'exponential' or 'matern'.")
+    }
+
+    # A tiny diagonal jitter protects Cholesky decompositions from rounding
+    # problems 
+    # It is not the nugget variance tau2-it's purely a computational trick
+    R + diag(1e-8, n)
+  }
+
+```
+
+# 8 Main MCMC function to run data analysis
+
+```{r, message=FALSE, warning=FALSE}
+# MCMC FUNCTION ----------------------------------------------------------
+
+run_spatial_mcmc <- function(
+    data,
+    response,
+    covariates,
+    coords,
+    n_iter = 10000,
+    burnin = 5000,
+    thin = 5,
+    cov_family = "exponential",
+    priors = list(
+      beta_mean = 0,
+      beta_var = 1000,
+      sigma2_shape = 2,
+      sigma2_rate = 1,
+      tau2_shape = 2,
+      tau2_rate = 1,
+      phi_shape = 2,
+      phi_rate = 1
+    ),
+    initial_values = list(
+      beta = NULL,
+      W = NULL,
+      sigma2 = 0.5,
+      tau2 = 0.2,
+      phi = 1
+    ),
+    phi_proposal_sd = 0.15,  #This is the standard deviation of the proposal distribution used in the Metropolis-Hastings algorithm 
+                             #for the spatial range parameter ϕ,It controls how large the steps are when proposing new values of ϕ.
+    progress_every = 100     #This controls how often the MCMC algorithm prints progress updates to the console during the simulation.
+) {                          #i.e we will see Iteration: 100 Iteration: 200 Iteration: 300, ...
+
+  # Data and design matrix
+  
+  Y <- as.numeric(data[[response]])   
+
+  X <- model.matrix(
+    reformulate(covariates, response = NULL),  # create design matrix with intercept
+    data = data
+  )
+
+  coords <- as.matrix(coords)
+
+  n <- length(Y)
+  p <- ncol(X)
+
+  if (nrow(X) != n || nrow(coords) != n) {
+    stop("Y, X and coordinates must have the same number of rows.")
+  }
+
+  if (!all(is.finite(Y))) {
+    stop("The response contains NA, NaN or Inf.")
+  }
+
+  if (!all(is.finite(X))) {
+    stop("The design matrix contains NA, NaN or Inf.")
+  }
+
+  if (!all(is.finite(coords))) {
+    stop("The coordinates contain NA, NaN or Inf.")
+  }
+
+  if (n_iter < 2 || burnin < 0 || burnin >= n_iter || thin < 1) {
+    stop("Require n_iter >= 2, 0 <= burnin < n_iter, and thin >= 1.")
+  }
+
+  if (!is.finite(phi_proposal_sd) || phi_proposal_sd <= 0) {
+    stop("phi_proposal_sd must be positive and finite.")
+  }
+
+  # Standardising coordinates makes phi dimensionless. The transformation
+  # attributes are retained for interpretation and future prediction.
+  coords_scaled <- scale(coords)
+  coord_center <- attr(coords_scaled, "scaled:center") # This extracts the means used for centering:
+  coord_scale <- attr(coords_scaled, "scaled:scale") # This extracts the standard deviations used for scaling:
+  
+  
+  distance_matrix <- as.matrix(dist(coords_scaled)) # We will use the distance matrix for the below function.
+
+  #  Spatial correlation matrix
+  make_correlation <- function(phi) {
+    if (!is.finite(phi) || phi <= 0) {
+      stop("phi must be positive and finite.")
+    }
+
+    if (cov_family == "exponential") {
+      R <- exp(-distance_matrix / phi)
+    } else if (cov_family == "matern") {
+      R <- geoR::matern(
+        distance_matrix,
+        phi = phi,
+        kappa = 1.5
+      )
+    } else {
+      stop("Use cov_family = 'exponential' or 'matern'.")
+    }
+
+    # A tiny diagonal jitter protects Cholesky decompositions from rounding
+    # problems 
+    # It is not the nugget variance tau2-it's purely a computational trick
+    R + diag(1e-8, n)
+  }
+
+  
+  # important helper function.
+  # Draw N(Q^{-1}b, Q^{-1}) using the Cholesky factor of precision Q.
+  rmvn_precision <- function(precision, linear_term) {
+    U <- chol(precision)
+
+    posterior_mean <- backsolve(
+      U,
+      forwardsolve(t(U), linear_term)
+    )
+
+    random_part <- backsolve(U, rnorm(length(linear_term)))
+
+    as.numeric(posterior_mean + random_part)
+  }
+  
+  
+
+  # Initial values
+  beta_current <- if (is.null(initial_values$beta)) {
+    as.numeric(qr.solve(X, Y)) # use QR decomposition to solve linear equation for beta
+  } else {
+    as.numeric(initial_values$beta)
+  }
+  
+
+  if (length(beta_current) != p || !all(is.finite(beta_current))) {
+    stop("initial_values$beta must contain ", p, " finite values.")
+  }
+
+  W_current <- if (is.null(initial_values$W)) { # our default initial value of W is Null,
+    rep(0, n)
+  } else {
+    as.numeric(initial_values$W)
+  }
+
+  if (length(W_current) != n || !all(is.finite(W_current))) {
+    stop("initial_values$W must contain ", n, " finite values.")
+  }
+
+  # use our defualt values
+  sigma2_current <- initial_values$sigma2
+  tau2_current <- initial_values$tau2
+  phi_current <- initial_values$phi
+  
+  
+  
+
+  positive_initials <- c(
+    sigma2 = sigma2_current,
+    tau2 = tau2_current,
+    phi = phi_current
+  )
+
+  if (!all(is.finite(positive_initials)) || any(positive_initials <= 0)) {
+    stop("Initial sigma2, tau2 and phi must be positive and finite.")
+  }
+
+  
+  beta_prior_mean <- rep(priors$beta_mean, p)
+  beta_prior_precision <- diag(1 / priors$beta_var, p) # check the default value of the fuction.
+
+  # Allocate storage
+  beta_chain <- matrix(NA_real_, nrow = n_iter, ncol = p)
+  
+  W_chain <- matrix(NA_real_, nrow = n_iter, ncol = n)
+  
+  sigma2_chain <- numeric(n_iter)
+  
+  tau2_chain <- numeric(n_iter)
+  
+  phi_chain <- numeric(n_iter)
+  
+  log_likelihood_chain <- numeric(n_iter)
+  
+  phi_accepted <- logical(n_iter)  # default as FALSE
+
+  beta_chain[1, ] <- beta_current
+  W_chain[1, ] <- W_current
+  sigma2_chain[1] <- sigma2_current
+  tau2_chain[1] <- tau2_current
+  phi_chain[1] <- phi_current
+
+  R_current <- make_correlation(phi_current)  #correlation matrix R, exponential or Matern with parameter phi.
+  
+  Sigma_Y <- sigma2_current * R_current + tau2_current * diag(n)  ### Total covariance = spatial covariance + nugget covariance, see math explanation
+  
+    log_likelihood_chain[1] <- mvtnorm::dmvnorm(  #PDF of multivariate normal distribution
+    Y,
+    mean = as.numeric(X %*% beta_current),
+    sigma = Sigma_Y,
+    log = TRUE
+  )
+
+  cat("\nRunning MCMC for", cov_family, "covariance function...\n")
+  cat("Number of observations:", n, "\n")
+  cat("Number of regression coefficients:", p, "\n")
+
+  #  MCMC iterations
+  for (i in 2:n_iter) {
+    
+    if (progress_every > 0 && i %% progress_every == 0) {  cat("Iteration:", i, "\n")   }
+
+    # beta | Y, W, tau2
+    beta_precision <-
+      crossprod(X) / tau2_current + beta_prior_precision
+
+    beta_linear_term <-
+      crossprod(X, Y - W_current) / tau2_current +
+      beta_prior_precision %*% beta_prior_mean
+
+    beta_current <- rmvn_precision(
+      beta_precision,
+      beta_linear_term
+    )
+
+    # W | Y, beta, sigma2, tau2, phi
+    R_current <- make_correlation(phi_current)
+    R_inverse <- chol2inv(chol(R_current))
+
+    W_precision <-
+      diag(1 / tau2_current, n) + R_inverse / sigma2_current
+
+    W_linear_term <-
+      as.numeric(Y - X %*% beta_current) / tau2_current
+
+    W_current <- rmvn_precision(W_precision, W_linear_term)
+
+    # sigma2 | W, phi
+    sigma2_shape <- priors$sigma2_shape + n / 2
+    sigma2_rate <- priors$sigma2_rate +
+      0.5 * drop(crossprod(W_current, R_inverse %*% W_current))
+
+    sigma2_current <- 1 / rgamma(
+      1,
+      shape = sigma2_shape,
+      rate = sigma2_rate
+    )
+
+    # tau2 | Y, beta, W
+    residual <- as.numeric(Y - X %*% beta_current - W_current)
+    tau2_shape <- priors$tau2_shape + n / 2
+    tau2_rate <- priors$tau2_rate + 0.5 * sum(residual^2)
+
+    tau2_current <- 1 / rgamma(
+      1,
+      shape = tau2_shape,
+      rate = tau2_rate
+    )
+
+    # phi | W, sigma2: random-walk MH on eta = log(phi).
+    # The +eta terms are the Jacobians for transforming phi to log(phi).
+    # Save the current state so rejection can be shown explicitly.
+    phi_old <- phi_current
+    R_old <- R_current
+
+    eta_current <- log(phi_current)
+    eta_proposed <- rnorm(1, eta_current, phi_proposal_sd)
+    phi_proposed <- exp(eta_proposed)
+    R_proposed <- make_correlation(phi_proposed)
+
+    log_target_current <- mvtnorm::dmvnorm(
+      W_current,
+      mean = rep(0, n),
+      sigma = sigma2_current * R_current,
+      log = TRUE
+    ) +
+      dgamma(
+        phi_current,
+        shape = priors$phi_shape,
+        rate = priors$phi_rate,
+        log = TRUE
+      ) +
+      eta_current
+
+    log_target_proposed <- mvtnorm::dmvnorm(
+      W_current,
+      mean = rep(0, n),
+      sigma = sigma2_current * R_proposed,
+      log = TRUE
+    ) +
+      dgamma(
+        phi_proposed,
+        shape = priors$phi_shape,
+        rate = priors$phi_rate,
+        log = TRUE
+      ) +
+      eta_proposed
+
+    log_acceptance_ratio <- log_target_proposed - log_target_current
+
+    if (
+      is.finite(log_acceptance_ratio) &&
+      log(runif(1)) < log_acceptance_ratio
+    ) {
+      # Accept: move the chain to the proposed state.
+      phi_current <- phi_proposed
+      R_current <- R_proposed
+      phi_accepted[i] <- TRUE
+    } else {
+      # Reject: repeat the previous state in the Markov chain.
+      phi_current <- phi_old
+      R_current <- R_old
+      phi_accepted[i] <- FALSE
+    }
+
+    # Marginal likelihood Y | beta, sigma2, tau2, phi
+    Sigma_Y <- sigma2_current * R_current + tau2_current * diag(n)  ## Total covariance = spatial covariance + nugget covariance
+
+    log_likelihood_current <- mvtnorm::dmvnorm(  # PDF of multiviate normal distribution
+      Y,
+      mean = as.numeric(X %*% beta_current),
+      sigma = Sigma_Y,
+      log = TRUE
+    )
+
+    current_values <- c(
+      beta_current,
+      W_current,
+      sigma2_current,
+      tau2_current,
+      phi_current,
+      log_likelihood_current
+    )
+
+    if (!all(is.finite(current_values))) {
+      stop("A non-finite value was generated at iteration ", i, ".")
+    }
+
+    beta_chain[i, ] <- beta_current
+    W_chain[i, ] <- W_current
+    sigma2_chain[i] <- sigma2_current
+    tau2_chain[i] <- tau2_current
+    phi_chain[i] <- phi_current
+    log_likelihood_chain[i] <- log_likelihood_current
+  }
+
+  # Burn-in and thinning
+  keep_idx <- seq(burnin + 1, n_iter, by = thin)
+
+  mcmc_samples <- cbind(
+    beta_chain[keep_idx, , drop = FALSE],
+    sigma2 = sigma2_chain[keep_idx],
+    tau2 = tau2_chain[keep_idx],
+    phi = phi_chain[keep_idx],
+    log_lik = log_likelihood_chain[keep_idx]
+  )
+
+  colnames(mcmc_samples)[seq_len(p)] <- paste0("beta_", 0:(p - 1))
+
+  if (!all(is.finite(mcmc_samples))) {
+    bad_values <- which(!is.finite(mcmc_samples), arr.ind = TRUE)
+    print(bad_values)
+    stop("Non-finite values were found in retained MCMC samples.")
+  }
+
+  mcmc_object <- coda::mcmc(
+    mcmc_samples,
+    start = burnin + 1,
+    thin = thin
+  )
+
+  list(
+    samples = mcmc_object,
+    parameters = list(
+      beta = beta_chain[keep_idx, , drop = FALSE],
+      W = W_chain[keep_idx, , drop = FALSE],
+      sigma2 = sigma2_chain[keep_idx],
+      tau2 = tau2_chain[keep_idx],
+      phi = phi_chain[keep_idx],
+      log_likelihood = log_likelihood_chain[keep_idx]
+    ),
+    acceptance_rate = mean(phi_accepted[2:n_iter]),
+    kept_iterations = keep_idx,
+    coordinate_scaling = list(
+      center = coord_center,
+      scale = coord_scale
+    ),
+    settings = list(
+      n_iter = n_iter,
+      burnin = burnin,
+      thin = thin,
+      cov_family = cov_family,
+      phi_proposal_sd = phi_proposal_sd
+    )
+  )
+}
+
+
+
+```
+
+```{r, eval=FALSE}
+Sigma_Y <- sigma2_current * R_current + tau2_current * diag(n)
+```
+
+## 8.1 math behind the above R code for covariance of Y
+
+### 8.1.1 The Statistical Model
+
+#### Model Specification
+
+Recall the spatial linear model:
+
+$$\mathbf{Y} = \mathbf{X}\boldsymbol{\beta} + \mathbf{W} + \boldsymbol{\varepsilon},$$
+
+where:
+
+- $\mathbf{Y}$: $n \times 1$ response vector
+- $\mathbf{X}$: $n \times p$ design matrix
+- $\boldsymbol{\beta}$: $p \times 1$ vector of regression coefficients
+- $\mathbf{W}$: $n \times 1$ vector of spatial random effects
+- $\boldsymbol{\varepsilon}$: $n \times 1$ vector of independent errors (nugget)
+
+#### Variance-Covariance Structure
+
+The total variance of $\mathbf{Y}$, conditional on $\boldsymbol{\beta}$, is:
+
+$$\operatorname{Var}(\mathbf{Y})
+= \operatorname{Var}(\mathbf{W})
++ \operatorname{Var}(\boldsymbol{\varepsilon}),$$
+
+because $\mathbf{W}$ and $\boldsymbol{\varepsilon}$ are independent.
+
+#### Components of the Covariance Matrix
+
+##### Component 1: Spatial Variance $\sigma^2\mathbf{R}$
+
+The spatial random effects have covariance:
+
+$$\operatorname{Var}(\mathbf{W})
+= \sigma^2\mathbf{R}(\phi),$$
+
+where:
+
+- $\sigma^2$: spatial variance parameter (partial sill)
+- $\mathbf{R}(\phi)$: spatial correlation matrix that depends on $\phi$
+
+#### Component 2: Nugget Variance $\tau^2\mathbf{I}$
+
+The independent errors have covariance:
+
+$$\operatorname{Var}(\boldsymbol{\varepsilon})
+= \tau^2\mathbf{I},$$
+
+where:
+
+- $\tau^2$: nugget variance
+- $\mathbf{I}$: $n \times n$ identity matrix
+
+#### Total Covariance
+
+Therefore,
+
+$$\operatorname{Var}(\mathbf{Y})
+= \sigma^2\mathbf{R}(\phi) + \tau^2\mathbf{I}.$$
+
+```{r, eval=FALSE}
+log_likelihood_current <- dmvnorm(
+    Y,
+    mean = as.numeric(X %*% beta_current),
+    sigma = Sigma_Y,
+    log = TRUE
+)
+```
+
+The above R code calculate the The multivariate normal log-likelihood :
+
+$$\log L = -\frac{n}{2}\log(2\pi)
+          - \frac{1}{2}\log|\Sigma|
+          - \frac{1}{2}(Y-\mu)^T \Sigma^{-1}(Y-\mu)$$
+
+Where:
+
+$$\mu = X\beta$$
+
+and
+
+$$\Sigma = \sigma^2 R + \tau^2 I$$
+
+# 9 Mathematics of How $\boldsymbol{\beta}$ Was Updated
+
+
+# Model specification
+
+The spatial linear model is
+
+$$
+\mathbf{Y}
+=
+\mathbf{X}\boldsymbol{\beta}
++
+\mathbf{W}
++
+\boldsymbol{\varepsilon},
+$$
+
+where:
+
+- $\mathbf{Y}$ is an $n \times 1$ vector of responses;
+- $\mathbf{X}$ is an $n \times p$ design matrix;
+- $\boldsymbol{\beta}$ is a $p \times 1$ vector of regression coefficients;
+- $\mathbf{W}$ is an $n \times 1$ vector of spatial random effects; and
+- $\boldsymbol{\varepsilon}$ is an $n \times 1$ vector of independent errors.
+
+## Distributional assumptions
+
+The model assumes
+
+$$
+\boldsymbol{\varepsilon}
+\sim
+N_n\left(\mathbf{0},\tau^2\mathbf{I}_n\right)
+$$
+
+and
+
+$$
+\mathbf{W}
+\sim
+N_n\left\{\mathbf{0},\sigma^2\mathbf{R}(\phi)\right\}.
+$$
+
+Therefore,
+
+$$
+\mathbf{Y}
+\mid
+\boldsymbol{\beta},\mathbf{W},\tau^2
+\sim
+N_n\left(
+\mathbf{X}\boldsymbol{\beta}+\mathbf{W},
+\tau^2\mathbf{I}_n
+\right).
+$$
+
+## Prior specification
+
+The prior for $\boldsymbol{\beta}$ is multivariate normal:
+
+$$
+\boldsymbol{\beta}
+\sim
+N_p\left(\boldsymbol{\mu}_0,\boldsymbol{\Sigma}_0\right),
+$$
+
+where $\boldsymbol{\mu}_0$ is the prior mean vector and
+$\boldsymbol{\Sigma}_0$ is the prior covariance matrix.
+
+# Part 1: The likelihood function
+
+## Step 1: Rewrite the model in terms of the errors
+
+From
+
+$$
+\mathbf{Y}
+=
+\mathbf{X}\boldsymbol{\beta}
++
+\mathbf{W}
++
+\boldsymbol{\varepsilon},
+$$
+
+we obtain
+
+$$
+\boldsymbol{\varepsilon}
+=
+\mathbf{Y}
+-
+\mathbf{X}\boldsymbol{\beta}
+-
+\mathbf{W}.
+$$
+
+## Step 2: Write the density of the errors
+
+Since
+$\boldsymbol{\varepsilon}\sim
+N_n(\mathbf{0},\tau^2\mathbf{I}_n)$,
+its probability density function is
+
+$$
+f(\boldsymbol{\varepsilon})
+=
+\frac{1}
+{(2\pi)^{n/2}\lvert\tau^2\mathbf{I}_n\rvert^{1/2}}
+\exp\left\{
+  -\frac{1}{2}
+  \boldsymbol{\varepsilon}^{\mathsf T}
+  (\tau^2\mathbf{I}_n)^{-1}
+  \boldsymbol{\varepsilon}
+\right\}.
+$$
+
+## Step 3: Simplify the density
+
+The determinant is
+
+$$
+\lvert\tau^2\mathbf{I}_n\rvert^{1/2}
+=
+(\tau^{2n})^{1/2}
+=
+\tau^n,
+$$
+
+and the inverse is
+
+$$
+(\tau^2\mathbf{I}_n)^{-1}
+=
+\frac{1}{\tau^2}\mathbf{I}_n.
+$$
+
+Therefore,
+
+$$
+f(\boldsymbol{\varepsilon})
+=
+\frac{1}{(2\pi)^{n/2}\tau^n}
+\exp\left\{
+  -\frac{1}{2\tau^2}
+  \boldsymbol{\varepsilon}^{\mathsf T}
+  \boldsymbol{\varepsilon}
+\right\}.
+$$
+
+## Step 4: Substitute the expression for the errors
+
+Substituting
+$\boldsymbol{\varepsilon}
+=\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W}$
+gives
+
+$$
+f(\boldsymbol{\varepsilon})
+=
+\frac{1}{(2\pi)^{n/2}\tau^n}
+\exp\left\{
+  -\frac{1}{2\tau^2}
+  (\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W})^{\mathsf T}
+  (\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W})
+\right\}.
+$$
+
+## Step 5: Transform from the errors to the response
+
+The likelihood of $\mathbf{Y}$ is
+
+$$
+L(\boldsymbol{\beta}\mid\mathbf{Y},\mathbf{W},\tau^2)
+=
+f_{\mathbf{Y}}
+(\mathbf{Y}\mid\boldsymbol{\beta},\mathbf{W},\tau^2).
+$$
+
+Because
+
+$$
+\boldsymbol{\varepsilon}
+=
+\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W}
+\qquad\text{and}\qquad
+\frac{\partial\boldsymbol{\varepsilon}}{\partial\mathbf{Y}}
+=
+\mathbf{I}_n,
+$$
+
+the absolute value of the Jacobian determinant is one. Thus,
+
+$$
+f_{\mathbf{Y}}
+(\mathbf{Y}\mid\boldsymbol{\beta},\mathbf{W},\tau^2)
+=
+f_{\boldsymbol{\varepsilon}}
+(\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W}).
+$$
+
+Therefore,
+
+$$
+f(\mathbf{Y}\mid\boldsymbol{\beta},\mathbf{W},\tau^2)
+=
+\frac{1}{(2\pi)^{n/2}\tau^n}
+\exp\left\{
+  -\frac{1}{2\tau^2}
+  (\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W})^{\mathsf T}
+  (\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W})
+\right\}.
+$$
+
+## Step 6: The likelihood as a function of the regression coefficients
+
+Viewed as a function of $\boldsymbol{\beta}$,
+
+$$
+L(\boldsymbol{\beta})
+=
+\frac{1}{(2\pi)^{n/2}\tau^n}
+\exp\left\{
+  -\frac{1}{2\tau^2}
+  (\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W})^{\mathsf T}
+  (\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W})
+\right\}.
+$$
+
+## Step 7: The likelihood up to proportionality
+
+When deriving the full conditional distribution, terms that do not depend on
+$\boldsymbol{\beta}$ can be omitted:
+
+$$
+L(\boldsymbol{\beta})
+\propto
+\exp\left\{
+  -\frac{1}{2\tau^2}
+  (\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W})^{\mathsf T}
+  (\mathbf{Y}-\mathbf{X}\boldsymbol{\beta}-\mathbf{W})
+\right\}.
+$$
+
+The normalising constant is dropped because it does not contain
+$\boldsymbol{\beta}$, cancels in ratios, and does not affect the shape of the
+conditional distribution.
+
+# Part 2: The full conditional distribution of $\boldsymbol{\beta}$
+
+## Step 1: Expand the likelihood
+
+The quadratic form can be expanded as
+
+$$
+\begin{aligned}
+&(\mathbf{Y}-\mathbf{W}-\mathbf{X}\boldsymbol{\beta})^{\mathsf T}
+(\mathbf{Y}-\mathbf{W}-\mathbf{X}\boldsymbol{\beta})\\
+&\quad=
+(\mathbf{Y}-\mathbf{W})^{\mathsf T}(\mathbf{Y}-\mathbf{W})
+-2\boldsymbol{\beta}^{\mathsf T}\mathbf{X}^{\mathsf T}
+(\mathbf{Y}-\mathbf{W})
++\boldsymbol{\beta}^{\mathsf T}\mathbf{X}^{\mathsf T}
+\mathbf{X}\boldsymbol{\beta}.
+\end{aligned}
+$$
+
+After removing terms that are constant with respect to
+$\boldsymbol{\beta}$,
+
+$$
+L(\boldsymbol{\beta})
+\propto
+\exp\left\{
+  -\frac{1}{2\tau^2}
+  \boldsymbol{\beta}^{\mathsf T}\mathbf{X}^{\mathsf T}
+  \mathbf{X}\boldsymbol{\beta}
+  +\frac{1}{\tau^2}
+  \boldsymbol{\beta}^{\mathsf T}\mathbf{X}^{\mathsf T}
+  (\mathbf{Y}-\mathbf{W})
+\right\}.
+$$
+
+## Step 2: Write and expand the prior
+
+The prior density, up to proportionality, is
+
+$$
+\pi(\boldsymbol{\beta})
+\propto
+\exp\left\{
+  -\frac{1}{2}
+  (\boldsymbol{\beta}-\boldsymbol{\mu}_0)^{\mathsf T}
+  \boldsymbol{\Sigma}_0^{-1}
+  (\boldsymbol{\beta}-\boldsymbol{\mu}_0)
+\right\}.
+$$
+
+The quadratic form is
+
+$$
+\begin{aligned}
+&(\boldsymbol{\beta}-\boldsymbol{\mu}_0)^{\mathsf T}
+\boldsymbol{\Sigma}_0^{-1}
+(\boldsymbol{\beta}-\boldsymbol{\mu}_0)\\
+&\quad=
+\boldsymbol{\beta}^{\mathsf T}\boldsymbol{\Sigma}_0^{-1}
+\boldsymbol{\beta}
+-2\boldsymbol{\beta}^{\mathsf T}\boldsymbol{\Sigma}_0^{-1}
+\boldsymbol{\mu}_0
++\boldsymbol{\mu}_0^{\mathsf T}\boldsymbol{\Sigma}_0^{-1}
+\boldsymbol{\mu}_0.
+\end{aligned}
+$$
+
+Hence,
+
+$$
+\pi(\boldsymbol{\beta})
+\propto
+\exp\left\{
+  -\frac{1}{2}
+  \boldsymbol{\beta}^{\mathsf T}\boldsymbol{\Sigma}_0^{-1}
+  \boldsymbol{\beta}
+  +\boldsymbol{\beta}^{\mathsf T}\boldsymbol{\Sigma}_0^{-1}
+  \boldsymbol{\mu}_0
+\right\}.
+$$
+
+## Step 3: Combine the likelihood and prior
+
+By Bayes' theorem,
+
+$$
+\pi(\boldsymbol{\beta}\mid\mathbf{Y},\mathbf{W},\tau^2)
+\propto
+L(\boldsymbol{\beta})\pi(\boldsymbol{\beta}).
+$$
+
+Taking logarithms and omitting additive constants gives
+
+$$
+\begin{aligned}
+\log\pi(\boldsymbol{\beta}\mid\mathbf{Y},\mathbf{W},\tau^2)
+={}&
+-\frac{1}{2\tau^2}
+\boldsymbol{\beta}^{\mathsf T}\mathbf{X}^{\mathsf T}
+\mathbf{X}\boldsymbol{\beta}
++\frac{1}{\tau^2}
+\boldsymbol{\beta}^{\mathsf T}\mathbf{X}^{\mathsf T}
+(\mathbf{Y}-\mathbf{W})\\
+&-\frac{1}{2}
+\boldsymbol{\beta}^{\mathsf T}\boldsymbol{\Sigma}_0^{-1}
+\boldsymbol{\beta}
++\boldsymbol{\beta}^{\mathsf T}\boldsymbol{\Sigma}_0^{-1}
+\boldsymbol{\mu}_0
++C.
+\end{aligned}
+$$
+
+## Step 4: Collect terms in $\boldsymbol{\beta}$
+
+Collecting the quadratic and linear terms yields
+
+$$
+\begin{aligned}
+\log\pi(\boldsymbol{\beta}\mid\mathbf{Y},\mathbf{W},\tau^2)
+={}&
+-\frac{1}{2}\boldsymbol{\beta}^{\mathsf T}
+\left(
+  \frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}
+  +\boldsymbol{\Sigma}_0^{-1}
+\right)
+\boldsymbol{\beta}\\
+&+
+\boldsymbol{\beta}^{\mathsf T}
+\left[
+  \frac{\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W})}{\tau^2}
+  +\boldsymbol{\Sigma}_0^{-1}\boldsymbol{\mu}_0
+\right]
++C.
+\end{aligned}
+$$
+
+Define the posterior precision matrix and linear term as
+
+$$
+\mathbf{Q}_{\beta}
+=
+\frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}
++\boldsymbol{\Sigma}_0^{-1}
+$$
+
+and
+
+$$
+\mathbf{b}_{\beta}
+=
+\frac{\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W})}{\tau^2}
++\boldsymbol{\Sigma}_0^{-1}\boldsymbol{\mu}_0.
+$$
+
+Then
+
+$$
+\log\pi(\boldsymbol{\beta}\mid\cdot)
+=
+-\frac{1}{2}\boldsymbol{\beta}^{\mathsf T}
+\mathbf{Q}_{\beta}\boldsymbol{\beta}
++\boldsymbol{\beta}^{\mathsf T}\mathbf{b}_{\beta}
++C.
+$$
+
+## Step 5: Recognise the multivariate normal form
+
+For
+
+$$
+\boldsymbol{\beta}
+\sim
+N_p(\boldsymbol{\mu}_*,\boldsymbol{\Sigma}_*),
+$$
+
+the log-density can be written as
+
+$$
+\begin{aligned}
+\log\pi(\boldsymbol{\beta})
+&=
+-\frac{1}{2}
+(\boldsymbol{\beta}-\boldsymbol{\mu}_*)^{\mathsf T}
+\boldsymbol{\Sigma}_*^{-1}
+(\boldsymbol{\beta}-\boldsymbol{\mu}_*)
++C\\
+&=
+-\frac{1}{2}
+\boldsymbol{\beta}^{\mathsf T}\boldsymbol{\Sigma}_*^{-1}
+\boldsymbol{\beta}
++\boldsymbol{\beta}^{\mathsf T}
+\boldsymbol{\Sigma}_*^{-1}\boldsymbol{\mu}_*
++C.
+\end{aligned}
+$$
+
+## Step 6: Match coefficients
+
+Matching the quadratic terms gives
+
+$$
+\boldsymbol{\Sigma}_*^{-1}
+=
+\frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}
++\boldsymbol{\Sigma}_0^{-1}
+=
+\mathbf{Q}_{\beta}.
+$$
+
+Therefore,
+
+$$
+\boldsymbol{\Sigma}_*
+=
+\mathbf{Q}_{\beta}^{-1}.
+$$
+
+Matching the linear terms gives
+
+$$
+\boldsymbol{\Sigma}_*^{-1}\boldsymbol{\mu}_*
+=
+\frac{\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W})}{\tau^2}
++\boldsymbol{\Sigma}_0^{-1}\boldsymbol{\mu}_0
+=
+\mathbf{b}_{\beta}.
+$$
+
+Thus,
+
+$$
+\boldsymbol{\mu}_*
+=
+\boldsymbol{\Sigma}_*
+\left[
+  \frac{\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W})}{\tau^2}
+  +\boldsymbol{\Sigma}_0^{-1}\boldsymbol{\mu}_0
+\right]
+=
+\mathbf{Q}_{\beta}^{-1}\mathbf{b}_{\beta}.
+$$
+
+## Step 7: Final result
+
+The full conditional distribution is
+
+$$
+\boxed{
+\boldsymbol{\beta}
+\mid
+\mathbf{Y},\mathbf{W},\tau^2
+\sim
+N_p(\boldsymbol{\mu}_*,\boldsymbol{\Sigma}_*)
+}
+$$
+
+where
+
+$$
+\boxed{
+\boldsymbol{\Sigma}_*^{-1}
+=
+\frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}
++\boldsymbol{\Sigma}_0^{-1}
+}
+$$
+
+and
+
+$$
+\boxed{
+\boldsymbol{\mu}_*
+=
+\boldsymbol{\Sigma}_*
+\left[
+  \frac{\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W})}{\tau^2}
+  +\boldsymbol{\Sigma}_0^{-1}\boldsymbol{\mu}_0
+\right].
+}
+$$
+
+# Part 3: Connection to the R code
+
+## R implementation
+
+The full conditional distribution is implemented in the MCMC function as
+follows:
+
+```{r, eval=FALSE}
+# Posterior precision matrix
+beta_precision <- crossprod(X) / tau2_current +
+  beta_prior_precision
+
+# Linear term
+beta_linear_term <- crossprod(X, Y - W_current) / tau2_current +
+  beta_prior_precision %*% beta_prior_mean
+
+# Draw from the multivariate normal full conditional distribution
+beta_current <- rmvn_precision(
+  beta_precision,
+  beta_linear_term
+)
+```
+
+The mathematical equivalents are
+
+$$
+\mathtt{\beta\_precision}
+=
+\frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}
++\boldsymbol{\Sigma}_0^{-1},
+$$
+
+$$
+\mathtt{\beta\_linear\_term}
+=
+\frac{\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W})}{\tau^2}
++\boldsymbol{\Sigma}_0^{-1}\boldsymbol{\mu}_0,
+$$
+
+and
+
+$$
+\mathtt{\beta\_current}
+\sim
+N_p\left(
+\mathtt{\beta\_precision}^{-1}*
+\mathtt{\beta\_linear\_term}, \text{  } 
+\mathtt{\beta\_precision}^{-1}
+\right).
+$$
+
+## The `rmvn_precision()` function
+
+```{r, eval=FALSE}
+rmvn_precision <- function(precision, linear_term) {
+  U <- chol(precision)
+
+  posterior_mean <- backsolve(
+    U,
+    forwardsolve(t(U), linear_term)
+  )
+
+  random_part <- backsolve(
+    U,
+    rnorm(length(linear_term))
+  )
+
+  as.numeric(posterior_mean + random_part)
+}
+```
+
+This function:
+
+1. computes the upper-triangular Cholesky factor
+   $\mathbf{Q}=\mathbf{U}^{\mathsf T}\mathbf{U}$;
+2. solves for the posterior mean
+   $\boldsymbol{\mu}=\mathbf{Q}^{-1}\mathbf{b}$;
+3. generates $\mathbf{z}\sim N_p(\mathbf{0},\mathbf{I}_p)$; and
+4. returns
+
+$$
+\mathbf{x}
+=
+\boldsymbol{\mu}
++
+\mathbf{U}^{-1}\mathbf{z}.
+$$
+
+Because
+$\operatorname{Var}(\mathbf{U}^{-1}\mathbf{z})
+=\mathbf{U}^{-1}\mathbf{U}^{-\mathsf T}
+=\mathbf{Q}^{-1}$,
+the returned value has distribution
+
+$$
+\mathbf{x}
+\sim
+N_p(\mathbf{Q}^{-1}\mathbf{b},\mathbf{Q}^{-1}).
+$$
+
+# Part 4: Special cases
+
+## Case 1: Flat prior
+
+When $\boldsymbol{\Sigma}_0^{-1}\rightarrow\mathbf{0}$,
+
+$$
+\boldsymbol{\Sigma}_*^{-1}
+=
+\frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}
+$$
+
+and
+
+$$
+\boldsymbol{\mu}_*
+=
+(\mathbf{X}^{\mathsf T}\mathbf{X})^{-1}
+\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W}).
+$$
+
+This is the ordinary least-squares estimate of $\boldsymbol{\beta}$,
+conditional on $\mathbf{W}$.
+
+## Case 2: Ridge prior
+
+If
+$\boldsymbol{\Sigma}_0^{-1}=\lambda\mathbf{I}_p$
+and $\boldsymbol{\mu}_0=\mathbf{0}$, then
+
+$$
+\boldsymbol{\Sigma}_*^{-1}
+=
+\frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}
++\lambda\mathbf{I}_p
+$$
+
+and
+
+$$
+\boldsymbol{\mu}_*
+=
+\left(
+  \frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}
+  +\lambda\mathbf{I}_p
+\right)^{-1}
+\frac{\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W})}{\tau^2}.
+$$
+
+This is the ridge-regression posterior mean, conditional on $\mathbf{W}$.
+
+## Case 3: No spatial effect
+
+When $\mathbf{W}=\mathbf{0}$,
+
+$$
+\boldsymbol{\mu}_*
+=
+\boldsymbol{\Sigma}_*
+\left(
+  \frac{\mathbf{X}^{\mathsf T}\mathbf{Y}}{\tau^2}
+  +\boldsymbol{\Sigma}_0^{-1}\boldsymbol{\mu}_0
+\right),
+$$
+
+which is the posterior mean from standard Bayesian linear regression.
+
+# Part 5: Intuitive interpretation
+
+The posterior precision is the sum of the information contributed by the data
+and the prior:
+
+$$
+\underbrace{\boldsymbol{\Sigma}_*^{-1}}_{\text{posterior precision}}
+=
+\underbrace{\frac{\mathbf{X}^{\mathsf T}\mathbf{X}}{\tau^2}}
+_{\text{data precision}}
++
+\underbrace{\boldsymbol{\Sigma}_0^{-1}}
+_{\text{prior precision}}.
+$$
+
+The posterior information vector is similarly
+
+$$
+\underbrace{\mathbf{b}_{\beta}}_{\text{posterior information}}
+=
+\underbrace{
+\frac{\mathbf{X}^{\mathsf T}(\mathbf{Y}-\mathbf{W})}{\tau^2}
+}_{\text{data information}}
++
+\underbrace{
+\boldsymbol{\Sigma}_0^{-1}\boldsymbol{\mu}_0
+}_{\text{prior information}}.
+$$
+
+Finally,
+
+$$
+\boldsymbol{\mu}_*
+=
+\boldsymbol{\Sigma}_*\mathbf{b}_{\beta}.
+$$
+
+The main insights are:
+
+- The data contribution uses $\mathbf{Y}-\mathbf{W}$, the response after removing the current spatial effect.
+- The prior contribution pulls the posterior toward   $\boldsymbol{\mu}_0$.
+- A smaller nugget variance $\tau^2$ gives more weight to the data.
+- As $\boldsymbol{\Sigma}_0^{-1}\rightarrow\mathbf{0}$, the posterior mean approaches the ordinary least-squares solution conditional on $\mathbf{W}$.
+
+
+# 10 Mathematics of How $W$ Was Updated
+
+
+## 10.1 Model specification
+
+The spatial linear model is
+
+$$
+\mathbf Y = \mathbf X\boldsymbol\beta + \mathbf W + \boldsymbol\varepsilon,
+$$
+
+where:
+
+- $\mathbf Y$ is an $n \times 1$ vector of responses;
+- $\mathbf X$ is an $n \times p$ design matrix;
+- $\boldsymbol\beta$ is a $p \times 1$ vector of regression coefficients;
+- $\mathbf W$ is an $n \times 1$ vector of spatial random effects; and
+- $\boldsymbol\varepsilon$ is an $n \times 1$ vector of independent errors.
+
+## 10.2 Distributional assumptions
+
+The model assumes
+
+$$
+\boldsymbol\varepsilon \sim N_n(\mathbf 0,\tau^2\mathbf I_n)
+$$
+
+and
+
+$$
+\mathbf W \sim N_n\left\{\mathbf 0,\sigma^2\mathbf R(\phi)\right\}.
+$$
+
+Therefore,
+
+$$
+\mathbf Y\mid\boldsymbol\beta,\mathbf W,\tau^2
+\sim
+N_n\left(\mathbf X\boldsymbol\beta+\mathbf W,\tau^2\mathbf I_n\right).
+$$
+
+## 10.3 The likelihood function for $\mathbf W$
+
+### 10.3.1 Rewrite the model in terms of errors
+
+From the model, we solve for the errors:
+
+$$
+\boldsymbol\varepsilon
+=\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W.
+$$
+
+### 10.3.2 Write the density of the errors
+
+Since $\boldsymbol\varepsilon\sim N_n(\mathbf 0,\tau^2\mathbf I_n)$, its probability density is
+
+$$
+f(\boldsymbol\varepsilon)
+=\frac{1}{(2\pi)^{n/2}|\tau^2\mathbf I_n|^{1/2}}
+\exp\left\{-\frac12
+\boldsymbol\varepsilon^\mathsf T
+(\tau^2\mathbf I_n)^{-1}
+\boldsymbol\varepsilon\right\}.
+$$
+
+### 10.3.3 Simplify the density
+
+The determinant is
+
+$$
+|\tau^2\mathbf I_n|^{1/2}
+=(\tau^{2n})^{1/2}=\tau^n,
+$$
+
+and the inverse is
+
+$$
+(\tau^2\mathbf I_n)^{-1}=\frac{1}{\tau^2}\mathbf I_n.
+$$
+
+Thus,
+
+$$
+f(\boldsymbol\varepsilon)
+=\frac{1}{(2\pi)^{n/2}\tau^n}
+\exp\left\{-\frac{1}{2\tau^2}
+\boldsymbol\varepsilon^\mathsf T\boldsymbol\varepsilon\right\}.
+$$
+
+### 10.3.4 Substitute the expression for $\boldsymbol\varepsilon$
+
+Substitution gives
+
+$$
+f(\boldsymbol\varepsilon)
+=\frac{1}{(2\pi)^{n/2}\tau^n}
+\exp\left\{-\frac{1}{2\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)\right\}.
+$$
+
+### 10.3.5 Transform from errors to $\mathbf Y$
+
+Because
+
+$$
+\boldsymbol\varepsilon=\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W
+\quad\text{and}\quad
+\frac{\partial\boldsymbol\varepsilon}{\partial\mathbf Y}=\mathbf I_n,
+$$
+
+the absolute value of the Jacobian determinant is 1. Therefore,
+
+$$
+f(\mathbf Y\mid\boldsymbol\beta,\mathbf W,\tau^2)
+=\frac{1}{(2\pi)^{n/2}\tau^n}
+\exp\left\{-\frac{1}{2\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)\right\}.
+$$
+
+### 10.3.6 View the likelihood as a function of $\mathbf W$
+
+Holding $\boldsymbol\beta$ and $\tau^2$ fixed,
+
+$$
+L(\mathbf W)
+=\frac{1}{(2\pi)^{n/2}\tau^n}
+\exp\left\{-\frac{1}{2\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)\right\}.
+$$
+
+Up to a constant that does not depend on $\mathbf W$,
+
+$$
+L(\mathbf W)\propto
+\exp\left\{-\frac{1}{2\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)\right\}.
+$$
+
+The factor $1/\{(2\pi)^{n/2}\tau^n\}$ can be dropped because it does not contain $\mathbf W$, cancels in ratios, and does not affect the shape of the conditional distribution.
+
+### 10.3.7 Expand the likelihood
+
+Let $\mathbf r=\mathbf Y-\mathbf X\boldsymbol\beta$. Then
+
+$$
+(\mathbf r-\mathbf W)^\mathsf T(\mathbf r-\mathbf W)
+=\mathbf r^\mathsf T\mathbf r
+-2\mathbf W^\mathsf T\mathbf r
++\mathbf W^\mathsf T\mathbf W.
+$$
+
+After dropping the term $\mathbf r^\mathsf T\mathbf r$, which does not depend on $\mathbf W$,
+
+$$
+L(\mathbf W)\propto
+\exp\left\{
+-\frac{1}{2\tau^2}\mathbf W^\mathsf T\mathbf W
++\frac{1}{\tau^2}\mathbf W^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta)
+\right\}.
+$$
+
+## 10.4 The full conditional distribution for $\mathbf W$
+
+### 10.4.1 Prior for $\mathbf W$
+
+Ignoring its normalising constant, the prior density is
+
+$$
+\pi(\mathbf W)\propto
+\exp\left\{-\frac12\mathbf W^\mathsf T
+(\sigma^2\mathbf R)^{-1}\mathbf W\right\}.
+$$
+
+Because
+
+$$
+(\sigma^2\mathbf R)^{-1}=\frac{1}{\sigma^2}\mathbf R^{-1},
+$$
+
+we have
+
+$$
+\pi(\mathbf W)\propto
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W\right\}.
+$$
+
+### 10.4.2 Combine the likelihood and prior
+
+By Bayes' theorem,
+
+$$
+\pi(\mathbf W\mid\mathbf Y,\boldsymbol\beta,\sigma^2,\tau^2,\phi)
+\propto L(\mathbf W)\pi(\mathbf W).
+$$
+
+Taking logarithms and ignoring constants,
+
+$$
+\log\pi(\mathbf W\mid\cdot)
+=-\frac{1}{2\tau^2}\mathbf W^\mathsf T\mathbf W
++\frac{1}{\tau^2}\mathbf W^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta)
+-\frac{1}{2\sigma^2}\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W.
+$$
+
+Collecting terms in $\mathbf W$ gives
+
+$$
+\log\pi(\mathbf W\mid\cdot)
+=-\frac12\mathbf W^\mathsf T
+\underbrace{\left(
+\frac{1}{\tau^2}\mathbf I_n+
+\frac{1}{\sigma^2}\mathbf R^{-1}
+\right)}_{\text{posterior precision}}
+\mathbf W
++\mathbf W^\mathsf T
+\underbrace{\left\{
+\frac{1}{\tau^2}(\mathbf Y-\mathbf X\boldsymbol\beta)
+\right\}}_{\text{linear term}}.
+$$
+
+### 10.4.3 Recognise the multivariate normal form
+
+For $\mathbf W\sim N_n(\boldsymbol\mu_W^*,\boldsymbol\Sigma_W^*)$, the log density is
+
+$$
+\log\pi(\mathbf W)
+=-\frac12
+(\mathbf W-\boldsymbol\mu_W^*)^\mathsf T
+(\boldsymbol\Sigma_W^*)^{-1}
+(\mathbf W-\boldsymbol\mu_W^*)+\text{constant}.
+$$
+
+Expanding it gives
+
+$$
+\log\pi(\mathbf W)
+=-\frac12\mathbf W^\mathsf T
+(\boldsymbol\Sigma_W^*)^{-1}\mathbf W
++\mathbf W^\mathsf T
+(\boldsymbol\Sigma_W^*)^{-1}\boldsymbol\mu_W^*
++\text{constant}.
+$$
+
+Matching the quadratic terms yields
+
+$$
+(\boldsymbol\Sigma_W^*)^{-1}
+=\frac{1}{\tau^2}\mathbf I_n
++\frac{1}{\sigma^2}\mathbf R^{-1}.
+$$
+
+Matching the linear terms yields
+
+$$
+(\boldsymbol\Sigma_W^*)^{-1}\boldsymbol\mu_W^*
+=\frac{1}{\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta),
+$$
+
+and hence
+
+$$
+\boldsymbol\mu_W^*
+=\boldsymbol\Sigma_W^*
+\left\{\frac{1}{\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta)\right\}.
+$$
+
+### 10.4.4 Final result
+
+The full conditional distribution is
+
+$$
+\mathbf W\mid\mathbf Y,\boldsymbol\beta,\sigma^2,\tau^2,\phi
+\sim N_n(\boldsymbol\mu_W^*,\boldsymbol\Sigma_W^*),
+$$
+
+where
+
+$$
+(\boldsymbol\Sigma_W^*)^{-1}
+=\frac{1}{\tau^2}\mathbf I_n
++\frac{1}{\sigma^2}\mathbf R^{-1}
+$$
+
+and
+
+$$
+\boldsymbol\mu_W^*
+=\boldsymbol\Sigma_W^*
+\left\{\frac{1}{\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta)\right\}.
+$$
+
+## 10.5 Alternative derivation using the joint distribution
+
+From the model,
+
+$$
+\begin{pmatrix}
+\mathbf Y\\
+\mathbf W
+\end{pmatrix}
+\sim
+N_{2n}\left\{
+\begin{pmatrix}
+\mathbf X\boldsymbol\beta\\
+\mathbf 0
+\end{pmatrix},
+\begin{pmatrix}
+\tau^2\mathbf I_n+\sigma^2\mathbf R & \sigma^2\mathbf R\\
+\sigma^2\mathbf R & \sigma^2\mathbf R
+\end{pmatrix}
+\right\}.
+$$
+
+The conditional normal formula gives
+
+$$
+\mathbf W\mid\mathbf Y
+\sim N_n(\boldsymbol\mu_{W\mid Y},\boldsymbol\Sigma_{W\mid Y}),
+$$
+
+where
+
+$$
+\boldsymbol\mu_{W\mid Y}
+=\sigma^2\mathbf R
+(\tau^2\mathbf I_n+\sigma^2\mathbf R)^{-1}
+(\mathbf Y-\mathbf X\boldsymbol\beta)
+$$
+
+and
+
+$$
+\boldsymbol\Sigma_{W\mid Y}
+=\sigma^2\mathbf R
+-\sigma^2\mathbf R
+(\tau^2\mathbf I_n+\sigma^2\mathbf R)^{-1}
+\sigma^2\mathbf R.
+$$
+
+This is equivalent to the precision-based formulation.
+
+## 10.6 Connection to the R code
+
+The conditional distribution is implemented in the MCMC function as follows:
+
+```{r, eval=FALSE}
+# Compute R^{-1} using Cholesky decomposition
+R_current <- make_correlation(phi_current)
+R_inverse <- chol2inv(chol(R_current))
+
+# Build the precision matrix and linear term
+W_precision <- diag(1 / tau2_current, n) +
+  R_inverse / sigma2_current
+
+W_linear_term <- as.numeric(Y - X %*% beta_current) /
+  tau2_current
+
+# Sample from the multivariate normal distribution
+W_current <- rmvn_precision(W_precision, W_linear_term)
+```
+
+The mathematical equivalents are
+
+$$
+\mathtt{W\_precision}
+=\frac{1}{\tau^2}\mathbf I_n
++\frac{1}{\sigma^2}\mathbf R^{-1},
+$$
+
+$$
+\mathtt{W\_linear\_term}
+=\frac{1}{\tau^2}(\mathbf Y-\mathbf X\boldsymbol\beta),
+$$
+
+and
+
+$$
+\mathtt{W\_current}
+\sim N_n\left(
+\mathtt{W\_precision}^{-1}\mathtt{W\_linear\_term},
+\mathtt{W\_precision}^{-1}
+\right).
+$$
+
+## 10.7 The `rmvn_precision()` function
+
+```{r, eval=FALSE}
+rmvn_precision <- function(precision, linear_term) {
+  U <- chol(precision)
+
+  posterior_mean <- backsolve(
+    U,
+    forwardsolve(t(U), linear_term)
+  )
+
+  random_part <- backsolve(
+    U,
+    rnorm(length(linear_term))
+  )
+
+  as.numeric(posterior_mean + random_part)
+}
+```
+
+This function:
+
+1. computes the Cholesky factor $\mathbf Q=\mathbf U^\mathsf T\mathbf U$;
+2. solves for the mean $\boldsymbol\mu=\mathbf Q^{-1}\mathbf b$;
+3. generates $\mathbf z\sim N_n(\mathbf 0,\mathbf I_n)$; and
+4. returns $\mathbf x=\boldsymbol\mu+\mathbf U^{-1}\mathbf z$.
+
+## 10.8 Computing $\mathbf R^{-1}$ using Cholesky decomposition
+
+```{r, eval=FALSE}
+# Step 1: Compute the Cholesky factor of R
+U <- chol(R_current)
+
+# Step 2: Compute R^{-1}
+R_inverse <- chol2inv(U)
+```
+
+The Cholesky decomposition is
+
+$$
+\mathbf R=\mathbf U^\mathsf T\mathbf U,
+$$
+
+where $\mathbf U$ is upper triangular. Therefore,
+
+$$
+\mathbf R^{-1}
+=\mathbf U^{-1}\mathbf U^{-\mathsf T}
+=\mathbf U^{-1}(\mathbf U^\mathsf T)^{-1}.
+$$
+
+The `chol2inv()` function obtains this inverse using triangular-system calculations.
+
+### 10.8.1 Intuitive interpretation of Precision matrix
+
+$$
+(\boldsymbol\Sigma_W^*)^{-1}
+=\frac{1}{\tau^2}\mathbf I_n
++\frac{1}{\sigma^2}\mathbf R^{-1}.
+$$
+
+| Term | Source | Interpretation |
+|:---|:---|:---|
+| $\mathbf I_n/\tau^2$ | Data (likelihood) | Information from the residuals |
+| $\mathbf R^{-1}/\sigma^2$ | Prior (process) | Spatial smoothness constraint |
+
+## 10.9 Mean vector
+
+$$
+\boldsymbol\mu_W^*
+=\boldsymbol\Sigma_W^*
+\left\{\frac{1}{\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta)\right\}.
+$$
+
+This is a shrinkage estimator. It pulls $\mathbf W$ toward the residuals $\mathbf Y-\mathbf X\boldsymbol\beta$, while smoothing them using the spatial correlation structure. The amount of shrinkage depends on $\sigma^2$, $\tau^2$, and $\phi$.
+
+## 10.10 Relationship to kriging
+
+The conditional mean of $\mathbf W$ is the best linear predictor:
+
+$$
+\widehat{\mathbf W}
+=\sigma^2\mathbf R
+(\tau^2\mathbf I_n+\sigma^2\mathbf R)^{-1}
+(\mathbf Y-\mathbf X\boldsymbol\beta).
+$$
+
+This is equivalent to the kriging predictor in geostatistics when the model parameters are known.
+
+## 10.11 Special cases
+
+## No spatial variation: $\sigma^2\to 0$
+
+As the spatial variance approaches zero,
+
+$$
+\boldsymbol\mu_W^*\to\mathbf 0,
+\qquad
+\boldsymbol\Sigma_W^*\to\mathbf 0.
+$$
+
+Thus, the spatial random effects shrink toward zero.
+
+## 10.12 Vanishing nugget variance: $\tau^2\to 0$
+
+As the independent-error variance approaches zero,
+
+$$
+\boldsymbol\mu_W^*
+\to\mathbf Y-\mathbf X\boldsymbol\beta,
+\qquad
+\boldsymbol\Sigma_W^*\to\mathbf 0.
+$$
+
+Thus, $\mathbf W$ is forced toward the residual vector.
+
+## 10.13 Known $\boldsymbol\beta$
+
+When $\mathbf X\boldsymbol\beta$ is fixed,
+
+$$
+\boldsymbol\mu_W^*
+=\boldsymbol\Sigma_W^*
+\left\{\frac{1}{\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta)\right\},
+$$
+
+which is the standard spatial prediction expression with a known mean.
+
+
+## 10.14 Note for update $\beta$ and $W$
+
+
+Both $\beta$ and $W$ are updated using Gibbs sampling because:
+
+- Their full conditional distributions are multivariate normal
+
+- These distributions have closed forms
+
+- They can be sampled from directly using rmvn_precision()
+
+- Every sample is accepted (no rejection)
+
+- No tuning is required
+
+
+# 11 Mathematics of How $\sigma^2$ Was Updated
+
+## 11.1 The model and assumptions
+
+### 11.1.1 Process model: prior for $\mathbf W$
+
+$$
+\mathbf W\mid\sigma^2,\phi
+\sim
+N_n\left\{\mathbf 0,\sigma^2\mathbf R(\phi)\right\}.
+$$
+
+### 11.1.2 Prior for $\sigma^2$
+
+Assume
+
+$$
+\sigma^2\sim\operatorname{IG}(a_\sigma,b_\sigma),
+$$
+
+using the shape--scale form of the Inverse-Gamma distribution. Its density is
+
+$$
+\pi(\sigma^2)
+=
+\frac{b_\sigma^{a_\sigma}}{\Gamma(a_\sigma)}
+(\sigma^2)^{-a_\sigma-1}
+\exp\left(-\frac{b_\sigma}{\sigma^2}\right),
+\qquad \sigma^2>0,
+$$
+
+where:
+
+- $a_\sigma$ is the shape parameter; and
+- $b_\sigma$ is the scale parameter in this Inverse-Gamma parameterisation.
+
+> **Parameterisation note:** In the density above, $b_\sigma$ appears in the numerator of $b_\sigma/\sigma^2$. It is therefore conventionally called the Inverse-Gamma **scale** parameter. Equivalently, if $1/\sigma^2$ is Gamma distributed, $b_\sigma$ is its Gamma rate parameter.
+
+## 11.2 The prior density for $\mathbf W$
+
+### 11.2.1 Full expression
+
+From
+
+$$
+\mathbf W\mid\sigma^2,\phi
+\sim N_n(\mathbf 0,\sigma^2\mathbf R),
+$$
+
+the density is
+
+$$
+f(\mathbf W\mid\sigma^2,\phi)
+=
+\frac{1}{(2\pi)^{n/2}|\sigma^2\mathbf R|^{1/2}}
+\exp\left\{
+-\frac12\mathbf W^\mathsf T
+(\sigma^2\mathbf R)^{-1}\mathbf W
+\right\}.
+$$
+
+- Simplify the determinant
+
+Because $\mathbf R$ is an $n\times n$ matrix,
+
+$$
+|\sigma^2\mathbf R|^{1/2}
+=\left\{(\sigma^2)^n|\mathbf R|\right\}^{1/2}
+=(\sigma^2)^{n/2}|\mathbf R|^{1/2}
+=\sigma^n|\mathbf R|^{1/2}.
+$$
+
+- Simplify the inverse
+
+$$
+(\sigma^2\mathbf R)^{-1}
+=\frac{1}{\sigma^2}\mathbf R^{-1}.
+$$
+- Substitute
+
+Therefore,
+
+$$
+f(\mathbf W\mid\sigma^2,\phi)
+=
+\frac{1}{(2\pi)^{n/2}(\sigma^2)^{n/2}|\mathbf R|^{1/2}}
+\exp\left\{
+-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W
+\right\}.
+$$
+
+## 11.3 The prior for $\sigma^2$
+
+The Inverse-Gamma prior is
+
+$$
+\pi(\sigma^2)
+=
+\frac{b_\sigma^{a_\sigma}}{\Gamma(a_\sigma)}
+(\sigma^2)^{-a_\sigma-1}
+\exp\left(-\frac{b_\sigma}{\sigma^2}\right).
+$$
+
+In general, if
+
+$$
+X\sim\operatorname{IG}(\alpha,\beta),
+$$
+
+then
+
+$$
+f(x)
+=
+\frac{\beta^\alpha}{\Gamma(\alpha)}
+x^{-\alpha-1}
+\exp\left(-\frac{\beta}{x}\right),
+\qquad x>0.
+$$
+
+Thus, in the present notation,
+
+$$
+\alpha=a_\sigma,
+\qquad
+\beta=b_\sigma.
+$$
+
+## 11.4 Combine the density of $\mathbf W$ and the prior for $\sigma^2$
+
+By Bayes' theorem,
+
+$$
+\pi(\sigma^2\mid\mathbf W,\phi)
+\propto
+f(\mathbf W\mid\sigma^2,\phi)\,
+\pi(\sigma^2).
+$$
+
+## 11.5 Write the unnormalised posterior
+
+$$
+\begin{aligned}
+\pi(\sigma^2\mid\mathbf W,\phi)
+&\propto
+\frac{1}{(2\pi)^{n/2}(\sigma^2)^{n/2}|\mathbf R|^{1/2}}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W\right\}\\
+&\quad\times
+\frac{b_\sigma^{a_\sigma}}{\Gamma(a_\sigma)}
+(\sigma^2)^{-a_\sigma-1}
+\exp\left(-\frac{b_\sigma}{\sigma^2}\right).
+\end{aligned}
+$$
+
+- Drop constants not involving $\sigma^2$
+
+The following terms do not depend on $\sigma^2$:
+
+- $(2\pi)^{-n/2}$;
+- $|\mathbf R|^{-1/2}$, conditional on $\phi$; and
+- $b_\sigma^{a_\sigma}/\Gamma(a_\sigma)$.
+
+They can be absorbed into the proportionality constant. Hence,
+
+$$
+\begin{aligned}
+\pi(\sigma^2\mid\mathbf W,\phi)
+&\propto
+(\sigma^2)^{-n/2}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W\right\}\\
+&\quad\times
+(\sigma^2)^{-a_\sigma-1}
+\exp\left(-\frac{b_\sigma}{\sigma^2}\right).
+\end{aligned}
+$$
+
+- Combine the powers of $\sigma^2$
+
+$$
+(\sigma^2)^{-n/2}(\sigma^2)^{-a_\sigma-1}
+=
+(\sigma^2)^{-(a_\sigma+n/2)-1}.
+$$
+
+- Combine the exponential terms
+
+$$
+\begin{aligned}
+&\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W\right\}
+\exp\left(-\frac{b_\sigma}{\sigma^2}\right)\\
+&\qquad=
+\exp\left\{-\frac{1}{\sigma^2}
+\left(b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W
+\right)\right\}.
+\end{aligned}
+$$
+
+- Final unnormalised posterior
+
+Therefore,
+
+$$
+\pi(\sigma^2\mid\mathbf W,\phi)
+\propto
+(\sigma^2)^{-(a_\sigma+n/2)-1}
+\exp\left\{-\frac{1}{\sigma^2}
+\left(b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W
+\right)\right\}.
+$$
+
+## 11.6 Recognise the Inverse-Gamma distribution
+
+The kernel of an Inverse-Gamma distribution is
+
+$$
+x^{-\alpha-1}\exp\left(-\frac{\beta}{x}\right).
+$$
+
+Comparing this with the posterior kernel gives
+
+$$
+x=\sigma^2,
+$$
+
+$$
+\alpha=a_\sigma+\frac n2,
+$$
+
+and
+
+$$
+\beta=b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W.
+$$
+
+## 11.7 Final result
+
+The full conditional distribution for $\sigma^2$ is
+
+$$
+\boxed{
+\sigma^2\mid\mathbf W,\phi
+\sim
+\operatorname{IG}\left(
+a_\sigma+\frac n2,
+b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W
+\right)
+}.
+$$
+
+The updated shape parameter is
+
+$$
+a^*=a_\sigma+\frac n2,
+$$
+
+and the updated scale parameter is
+
+$$
+b^*=b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W.
+$$
+
+## 11.8 Connection to the R code
+
+- Code implementation
+
+```{r, eval=FALSE}
+# Compute R^{-1} using Cholesky decomposition
+R_current <- make_correlation(phi_current)
+R_inverse <- chol2inv(chol(R_current))
+
+# Calculate the quadratic form
+Wt_Rinv_W <- drop(
+  crossprod(W_current, R_inverse %*% W_current)
+)
+
+# Updated shape parameter
+sigma2_shape <- priors$sigma2_shape + n / 2
+
+# Updated scale for the Inverse-Gamma distribution
+# This is also the rate used for the reciprocal Gamma draw.
+sigma2_scale <- priors$sigma2_scale + 0.5 * Wt_Rinv_W
+
+# If Z ~ Gamma(shape, rate), then 1/Z ~ IG(shape, scale = rate)
+sigma2_current <- 1 / rgamma(
+  1,
+  shape = sigma2_shape,
+  rate = sigma2_scale
+)
+```
+
+- Mathematical equivalence
+
+The code calculates
+
+$$
+\mathtt{sigma2\_shape}
+=a_\sigma+\frac n2,
+$$
+
+and
+
+$$
+\mathtt{sigma2\_scale}
+=b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W.
+$$
+
+It then generates
+
+$$
+\mathtt{sigma2\_current}
+\sim
+\operatorname{IG}(mathtt{sigma2\_shape},mathtt{sigma2\_scale}).
+$$
+
+## 11.9 Why we use the Inverse-Gamma distribution
+
+- Conjugacy
+
+The Inverse-Gamma prior is conjugate for $\sigma^2$ because:
+
+1. the conditional model for $\mathbf W$ is Normal with covariance $\sigma^2\mathbf R$;
+2. the prior for $\sigma^2$ is Inverse-Gamma; and
+3. the resulting full conditional distribution is also Inverse-Gamma.
+
+This is analogous to using:
+
+- a Normal prior for $\boldsymbol\beta$ with a Normal likelihood, producing a Normal full conditional; and
+- an Inverse-Gamma prior for $\tau^2$ in a Normal error model, producing an Inverse-Gamma full conditional.
+
+- Properties of the Inverse-Gamma distribution
+
+For $X\sim\operatorname{IG}(\alpha,\beta)$ under the shape--scale parameterisation used here:
+
+| Property | Value |
+|:---|:---|
+| Support | $x>0$ |
+| Mean | $\displaystyle \frac{\beta}{\alpha-1}$, for $\alpha>1$ |
+| Mode | $\displaystyle \frac{\beta}{\alpha+1}$ |
+| Variance | $\displaystyle \frac{\beta^2}{(\alpha-1)^2(\alpha-2)}$, for $\alpha>2$ |
+
+## 11.10 Intuitive interpretation
+
+- Shape parameter
+
+$$
+a^*=a_\sigma+\frac n2.
+$$
+
+- $a_\sigma$ represents prior information.
+- $n/2$ is the contribution from the $n$-dimensional spatial random-effects vector.
+
+- Scale parameter
+
+$$
+b^*=b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W.
+$$
+
+- $b_\sigma$ is the prior scale parameter.
+- $\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W$ is the contribution from the spatial random effects.
+
+- Interpretation of the quadratic form
+
+The term
+
+$$
+\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W
+$$
+
+is a squared Mahalanobis distance:
+
+1. $\mathbf R^{-1}$ accounts for the correlation among the spatial random effects.
+2. The quadratic form measures how large $\mathbf W$ is relative to the variation implied by $\mathbf R$.
+3. A larger quadratic form leads to a larger posterior value of $b^*$ and generally supports greater spatial variance.
+
+## 11.11 Full derivation chain
+
+- Step 1: Model assumption
+
+$$
+\mathbf W\mid\sigma^2,\phi
+\sim N_n(\mathbf 0,\sigma^2\mathbf R).
+$$
+
+- Step 2: Density of $\mathbf W$
+
+$$
+f(\mathbf W\mid\sigma^2,\phi)
+=
+\frac{1}{(2\pi)^{n/2}(\sigma^2)^{n/2}|\mathbf R|^{1/2}}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W\right\}.
+$$
+- Step 3: Prior for $\sigma^2$
+
+$$
+\pi(\sigma^2)
+=
+\frac{b_\sigma^{a_\sigma}}{\Gamma(a_\sigma)}
+(\sigma^2)^{-a_\sigma-1}
+\exp\left(-\frac{b_\sigma}{\sigma^2}\right).
+$$
+
+- Step 4: Apply Bayes' theorem
+
+$$
+\pi(\sigma^2\mid\mathbf W,\phi)
+\propto
+f(\mathbf W\mid\sigma^2,\phi)\pi(\sigma^2).
+$$
+
+- Step 5: Simplify
+
+$$
+\pi(\sigma^2\mid\mathbf W,\phi)
+\propto
+(\sigma^2)^{-(a_\sigma+n/2)-1}
+\exp\left\{-\frac{1}{\sigma^2}
+\left(b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W
+\right)\right\}.
+$$
+
+- Step 6: Recognise the Inverse-Gamma distribution
+
+$$
+\boxed{
+\sigma^2\mid\mathbf W,\phi
+\sim
+\operatorname{IG}\left(
+a_\sigma+\frac n2,
+b_\sigma+
+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W
+\right)
+}.
+$$
+
+# 12. Mathematics of How $\tau^2$ Was Updated
+
+## 12.1 The model and assumptions
+
+- Data model (likelihood)
+
+$$
+\mathbf Y\mid\boldsymbol\beta,\mathbf W,\tau^2
+\sim
+N_n\left(\mathbf X\boldsymbol\beta+\mathbf W,
+\tau^2\mathbf I_n\right).
+$$
+
+- Prior for $\tau^2$
+
+Assume
+
+$$
+\tau^2\sim\operatorname{IG}(a_\tau,b_\tau),
+$$
+
+using the shape--scale form of the Inverse-Gamma distribution. Its density is
+
+$$
+\pi(\tau^2)
+=
+\frac{b_\tau^{a_\tau}}{\Gamma(a_\tau)}
+(\tau^2)^{-a_\tau-1}
+\exp\left(-\frac{b_\tau}{\tau^2}\right),
+\qquad \tau^2>0,
+$$
+
+where:
+
+- $a_\tau$ is the shape parameter; and
+- $b_\tau$ is the scale parameter in this Inverse-Gamma parameterisation.
+
+> **Parameterisation note:** In this density, $b_\tau$ is conventionally called the Inverse-Gamma scale parameter. When $\tau^2$ is generated as the reciprocal of a Gamma random variable, the same value is used as the Gamma rate.
+
+## 12.2 The likelihood function
+
+- Write the likelihood
+
+From the data model, the likelihood as a function of $\tau^2$ is
+
+$$
+L(\tau^2)
+=
+\frac{1}{(2\pi)^{n/2}|\tau^2\mathbf I_n|^{1/2}}
+\exp\left\{
+-\frac12
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T
+(\tau^2\mathbf I_n)^{-1}
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)
+\right\}.
+$$
+
+- Simplify the determinant
+
+Because $\mathbf I_n$ is an $n\times n$ identity matrix,
+
+$$
+|\tau^2\mathbf I_n|^{1/2}
+=\left\{(\tau^2)^n\right\}^{1/2}
+=(\tau^2)^{n/2}
+=\tau^n.
+$$
+
+- Simplify the inverse
+
+$$
+(\tau^2\mathbf I_n)^{-1}
+=\frac{1}{\tau^2}\mathbf I_n.
+$$
+
+- Simplify the quadratic form
+
+Define the residual vector
+
+$$
+\mathbf r
+=\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W.
+$$
+
+Then
+
+$$
+\mathbf r^\mathsf T
+(\tau^2\mathbf I_n)^{-1}\mathbf r
+=\frac{1}{\tau^2}\mathbf r^\mathsf T\mathbf r.
+$$
+
+- Final likelihood
+
+Therefore,
+
+$$
+L(\tau^2)
+=
+\frac{1}{(2\pi)^{n/2}(\tau^2)^{n/2}}
+\exp\left\{
+-\frac{1}{2\tau^2}
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)
+\right\}.
+$$
+
+Equivalently,
+
+$$
+L(\tau^2)
+=
+\frac{1}{(2\pi)^{n/2}(\tau^2)^{n/2}}
+\exp\left(-\frac{\mathbf r^\mathsf T\mathbf r}{2\tau^2}\right).
+$$
+
+## 12.3 The prior for $\tau^2$
+
+The Inverse-Gamma prior is
+
+$$
+\pi(\tau^2)
+=
+\frac{b_\tau^{a_\tau}}{\Gamma(a_\tau)}
+(\tau^2)^{-a_\tau-1}
+\exp\left(-\frac{b_\tau}{\tau^2}\right).
+$$
+
+## 12.4 Combine the likelihood and prior
+
+By Bayes' theorem,
+
+$$
+\pi(\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W)
+\propto
+L(\tau^2)\pi(\tau^2).
+$$
+
+- Write the unnormalised posterior
+
+$$
+\begin{aligned}
+\pi(\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W)
+&\propto
+\frac{1}{(2\pi)^{n/2}(\tau^2)^{n/2}}
+\exp\left(-\frac{\mathbf r^\mathsf T\mathbf r}{2\tau^2}\right)\\
+&\quad\times
+\frac{b_\tau^{a_\tau}}{\Gamma(a_\tau)}
+(\tau^2)^{-a_\tau-1}
+\exp\left(-\frac{b_\tau}{\tau^2}\right).
+\end{aligned}
+$$
+
+- Drop constants not involving $\tau^2$
+
+The terms $(2\pi)^{-n/2}$ and $b_\tau^{a_\tau}/\Gamma(a_\tau)$ do not depend on $\tau^2$. They can be absorbed into the proportionality constant:
+
+$$
+\begin{aligned}
+\pi(\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W)
+&\propto
+(\tau^2)^{-n/2}
+\exp\left(-\frac{\mathbf r^\mathsf T\mathbf r}{2\tau^2}\right)\\
+&\quad\times
+(\tau^2)^{-a_\tau-1}
+\exp\left(-\frac{b_\tau}{\tau^2}\right).
+\end{aligned}
+$$
+
+- Combine the powers of $\tau^2$
+
+$$
+(\tau^2)^{-n/2}(\tau^2)^{-a_\tau-1}
+=
+(\tau^2)^{-(a_\tau+n/2)-1}.
+$$
+
+- Combine the exponential terms
+
+$$
+\begin{aligned}
+&\exp\left(-\frac{\mathbf r^\mathsf T\mathbf r}{2\tau^2}\right)
+\exp\left(-\frac{b_\tau}{\tau^2}\right)\\
+&\qquad=
+\exp\left\{-\frac{1}{\tau^2}
+\left(b_\tau+\frac12\mathbf r^\mathsf T\mathbf r\right)
+\right\}.
+\end{aligned}
+$$
+
+- Final unnormalised posterior
+
+Thus,
+
+$$
+\pi(\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W)
+\propto
+(\tau^2)^{-(a_\tau+n/2)-1}
+\exp\left\{-\frac{1}{\tau^2}
+\left(b_\tau+\frac12\mathbf r^\mathsf T\mathbf r\right)
+\right\}.
+$$
+
+Substituting $\mathbf r=\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W$ gives
+
+$$
+\begin{aligned}
+\pi(\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W)
+&\propto
+(\tau^2)^{-(a_\tau+n/2)-1}\\
+&\quad\times
+\exp\left[
+-\frac{1}{\tau^2}
+\left\{
+b_\tau+
+\frac12
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)
+\right\}
+\right].
+\end{aligned}
+$$
+
+## 12.5 Recognise the Inverse-Gamma distribution
+
+For
+
+$$
+X\sim\operatorname{IG}(\alpha,\beta),
+$$
+
+the density kernel is
+
+$$
+x^{-\alpha-1}\exp\left(-\frac{\beta}{x}\right).
+$$
+
+Matching this kernel with the posterior gives
+
+$$
+x=\tau^2,
+$$
+
+$$
+\alpha=a_\tau+\frac n2,
+$$
+
+and
+
+$$
+\beta=b_\tau+\frac12\mathbf r^\mathsf T\mathbf r.
+$$
+
+## 12.5 Final result
+
+The full conditional distribution for $\tau^2$ is
+
+$$
+\boxed{
+\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W
+\sim
+\operatorname{IG}\left[
+a_\tau+\frac n2,
+b_\tau+
+\frac12
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T
+(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)
+\right]
+}.
+$$
+
+The updated shape parameter is
+
+$$
+a^*=a_\tau+\frac n2,
+$$
+
+and the updated scale parameter is
+
+$$
+b^*=b_\tau+\frac12\mathbf r^\mathsf T\mathbf r,
+$$
+
+where
+
+$$
+\mathbf r=\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W.
+$$
+
+## 12.6 Comparison with $\sigma^2$
+
+- Similarities
+
+Both $\sigma^2$ and $\tau^2$ have Inverse-Gamma full conditional distributions.
+
+| Parameter | Updated shape | Updated scale |
+|:---:|:---|:---|
+| $\sigma^2$ | $a_\sigma+n/2$ | $b_\sigma+\frac12\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W$ |
+| $\tau^2$ | $a_\tau+n/2$ | $b_\tau+\frac12(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)^\mathsf T(\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W)$ |
+
+- Differences
+
+| Aspect | $\sigma^2$ | $\tau^2$ |
+|:---|:---|:---|
+| Source | Spatial process | Independent error |
+| Quadratic form | $\mathbf W^\mathsf T\mathbf R^{-1}\mathbf W$ | $\mathbf r^\mathsf T\mathbf r$ |
+| Correlation | Includes spatial correlation through $\mathbf R$ | Assumes independent errors through $\mathbf I_n$ |
+| Interpretation | Spatial variance | Nugget variance |
+
+## 12.7 Connection to the R code
+
+- Code implementation
+
+```{r, eval=FALSE}
+# Compute residuals
+residual <- as.numeric(
+  Y - X %*% beta_current - W_current
+)
+
+# Updated shape parameter
+tau2_shape <- priors$tau2_shape + n / 2
+
+# Updated Inverse-Gamma scale
+# This is also the rate for the reciprocal Gamma draw.
+tau2_scale <- priors$tau2_scale +
+  0.5 * sum(residual^2)
+
+# Sample from the Inverse-Gamma distribution
+tau2_current <- 1 / rgamma(
+  1,
+  shape = tau2_shape,
+  rate = tau2_scale
+)
+```
+
+- Mathematical equivalence
+
+The code calculates
+
+$$
+\mathtt{tau2\_shape}
+=a_\tau+\frac n2,
+$$
+
+and
+
+$$
+\mathtt{tau2\_scale}
+=b_\tau+\frac12\mathbf r^\mathsf T\mathbf r.
+$$
+
+It then generates
+
+$$
+\mathtt{tau2\_current}
+\sim
+\operatorname{IG}(mathtt{tau2\_shape},mathtt{tau2\_scale}).
+$$
+
+## 12.8 Step-by-step explanation of the code
+
+- Line 1: Compute the residuals
+
+```{r, eval=FALSE}
+residual <- as.numeric(
+  Y - X %*% beta_current - W_current
+)
+```
+
+Mathematically,
+
+$$
+\mathbf r=\mathbf Y-\mathbf X\boldsymbol\beta-\mathbf W.
+$$
+
+This calculation:
+
+- removes the mean trend $\mathbf X\boldsymbol\beta$;
+- removes the spatial random effects $\mathbf W$; and
+- leaves the independent errors $\boldsymbol\varepsilon$.
+
+- Line 2: Update the shape parameter
+
+```{r, eval=FALSE}
+tau2_shape <- priors$tau2_shape + n / 2
+```
+
+Mathematically,
+
+$$
+a^*=a_\tau+\frac n2.
+$$
+
+The $n/2$ term arises from the factor $(\tau^2)^{-n/2}$ in the Normal likelihood.
+
+- Line 3: Update the scale parameter
+
+```{r, eval=FALSE}
+tau2_scale <- priors$tau2_scale +
+  0.5 * sum(residual^2)
+```
+
+Mathematically,
+
+$$
+b^*=b_\tau+\frac12\mathbf r^\mathsf T\mathbf r.
+$$
+
+Here:
+
+- `sum(residual^2)` equals $\mathbf r^\mathsf T\mathbf r$;
+- the sum of squared residuals is multiplied by $1/2$; and
+- the result is added to the prior scale parameter.
+- Line 4: Sample $\tau^2$
+
+```{r, eval=FALSE}
+tau2_current <- 1 / rgamma(
+  1,
+  shape = tau2_shape,
+  rate = tau2_scale
+)
+```
+
+If
+
+$$
+Z\sim\operatorname{Gamma}(a^*,\text{rate}=b^*),
+$$
+
+then
+
+$$
+\frac{1}{Z}\sim\operatorname{IG}(a^*,\text{scale}=b^*).
+$$
+
+Therefore, `1 / rgamma()` generates the required Inverse-Gamma draw for $\tau^2$.
+
+## 12.9 Full derivation chain
+
+- Step 1: Model assumption
+
+$$
+\mathbf Y\mid\boldsymbol\beta,\mathbf W,\tau^2
+\sim
+N_n(\mathbf X\boldsymbol\beta+\mathbf W,\tau^2\mathbf I_n).
+$$
+
+- Step 2: Likelihood for $\tau^2$
+
+$$
+L(\tau^2)
+\propto
+(\tau^2)^{-n/2}
+\exp\left(-\frac{\mathbf r^\mathsf T\mathbf r}{2\tau^2}\right).
+$$
+
+- Step 3: Prior for $\tau^2$
+
+$$
+\pi(\tau^2)
+\propto
+(\tau^2)^{-a_\tau-1}
+\exp\left(-\frac{b_\tau}{\tau^2}\right).
+$$
+
+- Step 4: Apply Bayes' theorem
+
+$$
+\pi(\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W)
+\propto
+L(\tau^2)\pi(\tau^2).
+$$
+
+- Step 5: Simplify
+
+$$
+\pi(\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W)
+\propto
+(\tau^2)^{-(a_\tau+n/2)-1}
+\exp\left\{-\frac{1}{\tau^2}
+\left(b_\tau+\frac12\mathbf r^\mathsf T\mathbf r\right)
+\right\}.
+$$
+- Step 6: Recognise the Inverse-Gamma distribution
+
+$$
+\boxed{
+\tau^2\mid\mathbf Y,\boldsymbol\beta,\mathbf W
+\sim
+\operatorname{IG}\left(
+a_\tau+\frac n2,
+b_\tau+\frac12\mathbf r^\mathsf T\mathbf r
+\right)
+}.
+$$
+#  13 Mathematics as How $\phi$ was updated
+
+## 13.1 The model and assumptions
+
+### 13.1.1 Process model: prior for $\mathbf W$
+
+$$
+\mathbf W\mid\sigma^2,\phi
+\sim
+N_n\left\{\mathbf 0,\sigma^2\mathbf R(\phi)\right\}.
+$$
+
+### 13.1.2 Prior for $\phi$
+
+Assume
+
+$$
+\phi\sim\operatorname{Gamma}(a_\phi,b_\phi),
+$$
+
+where $a_\phi$ is the shape and $b_\phi$ is the rate. The prior density is
+
+$$
+\pi(\phi)
+=\frac{b_\phi^{a_\phi}}{\Gamma(a_\phi)}
+\phi^{a_\phi-1}\exp(-b_\phi\phi),
+\qquad \phi>0.
+$$
+
+### 13.1.3 The prior density for $\mathbf W$
+
+From the process model,
+
+$$
+f(\mathbf W\mid\sigma^2,\phi)
+=\frac{1}{(2\pi)^{n/2}|\sigma^2\mathbf R(\phi)|^{1/2}}
+\exp\left\{-\frac12\mathbf W^\mathsf T
+[\sigma^2\mathbf R(\phi)]^{-1}\mathbf W\right\}.
+$$
+
+- Simplify the determinant
+
+$$
+|\sigma^2\mathbf R(\phi)|^{1/2}
+=\left\{(\sigma^2)^n|\mathbf R(\phi)|\right\}^{1/2}
+=(\sigma^2)^{n/2}|\mathbf R(\phi)|^{1/2}.
+$$
+
+- Simplify the inverse
+
+$$
+[\sigma^2\mathbf R(\phi)]^{-1}
+=\frac{1}{\sigma^2}\mathbf R(\phi)^{-1}.
+$$
+
+- Substitute
+
+Therefore,
+
+$$
+f(\mathbf W\mid\sigma^2,\phi)
+=\frac{1}{(2\pi)^{n/2}(\sigma^2)^{n/2}|\mathbf R(\phi)|^{1/2}}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W\right\}.
+$$
+
+### 13.1.4 The prior for $\phi$
+
+The Gamma prior is
+
+$$
+\pi(\phi)
+=\frac{b_\phi^{a_\phi}}{\Gamma(a_\phi)}
+\phi^{a_\phi-1}\exp(-b_\phi\phi).
+$$
+
+### 13.1.5 Apply Bayes' theorem
+
+By Bayes' theorem,
+
+$$
+\pi(\phi\mid\mathbf W,\sigma^2)
+\propto
+f(\mathbf W\mid\sigma^2,\phi)\pi(\phi).
+$$
+
+- Write the unnormalised posterior
+
+$$
+\begin{aligned}
+\pi(\phi\mid\mathbf W,\sigma^2)
+&\propto
+\frac{1}{(2\pi)^{n/2}(\sigma^2)^{n/2}|\mathbf R(\phi)|^{1/2}}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W\right\}\\
+&\quad\times
+\frac{b_\phi^{a_\phi}}{\Gamma(a_\phi)}
+\phi^{a_\phi-1}\exp(-b_\phi\phi).
+\end{aligned}
+$$
+
+- Drop constants not involving $\phi$
+
+Conditional on $\mathbf W$ and $\sigma^2$, the following terms do not depend on $\phi$:
+
+- $(2\pi)^{-n/2}$;
+- $(\sigma^2)^{-n/2}$; and
+- $b_\phi^{a_\phi}/\Gamma(a_\phi)$.
+
+After dropping them,
+
+$$
+\begin{aligned}
+\pi(\phi\mid\mathbf W,\sigma^2)
+&\propto
+|\mathbf R(\phi)|^{-1/2}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W\right\}\\
+&\quad\times
+\phi^{a_\phi-1}\exp(-b_\phi\phi).
+\end{aligned}
+$$
+
+- Combine the exponential terms
+
+$$
+\pi(\phi\mid\mathbf W,\sigma^2)
+\propto
+|\mathbf R(\phi)|^{-1/2}
+\phi^{a_\phi-1}
+\exp\left\{-b_\phi\phi
+-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W
+\right\}.
+$$
+
+- Final unnormalised posterior
+
+The full conditional kernel is
+
+$$
+\boxed{
+\pi(\phi\mid\mathbf W,\sigma^2)
+\propto
+|\mathbf R(\phi)|^{-1/2}
+\phi^{a_\phi-1}
+\exp\left\{-b_\phi\phi
+-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W
+\right\}
+}.
+$$
+
+Equivalently,
+
+$$
+\pi(\phi\mid\mathbf W,\sigma^2)
+\propto
+|\sigma^2\mathbf R(\phi)|^{-1/2}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W\right\}
+\pi(\phi).
+$$
+
+### 13.1.6 Why this has no standard closed form
+
+$\phi$ appears nonlinearly in several parts of the conditional density.
+
+| Term | How $\phi$ appears | Why it is problematic |
+|:---|:---|:---|
+| $|\mathbf R(\phi)|^{-1/2}$ | Inside the determinant of a correlation matrix | The determinant is a nonlinear function of $\phi$ |
+| $\mathbf R(\phi)^{-1}$ | Inside a matrix inverse | Every element of the inverse generally changes with $\phi$ |
+| $\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W$ | Inside a quadratic form | It is a nonlinear function of $\phi$ |
+
+### 13.1.7 Determinant term
+
+If $\lambda_i(\phi)$ is the $i$th eigenvalue of $\mathbf R(\phi)$, then
+
+$$
+|\mathbf R(\phi)|
+=\prod_{i=1}^n\lambda_i(\phi).
+$$
+
+Every eigenvalue can depend on $\phi$ in a complicated way.
+
+### 13.1.8 Inverse term
+
+Using an eigendecomposition,
+
+$$
+\mathbf R(\phi)^{-1}
+=\mathbf U(\phi)\boldsymbol\Lambda(\phi)^{-1}
+\mathbf U(\phi)^\mathsf T,
+$$
+
+where both the eigenvectors and eigenvalues can depend on $\phi$.
+
+### 13.1.9 Quadratic form
+
+The quadratic form can be written as
+
+$$
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W
+=\sum_{i=1}^n
+\frac{[\mathbf u_i(\phi)^\mathsf T\mathbf W]^2}
+{\lambda_i(\phi)}.
+$$
+
+Thus, it is a sum of terms whose numerators and denominators may both depend on $\phi$.
+
+## 13.2 Comparison with the other parameters
+
+| Parameter | Full conditional | Sampling method | Reason |
+|:---:|:---|:---|:---|
+| $\boldsymbol\beta$ | Multivariate Normal | Gibbs | Normal conjugacy |
+| $\mathbf W$ | Multivariate Normal | Gibbs | Normal conjugacy |
+| $\sigma^2$ | Inverse-Gamma | Gibbs | Inverse-Gamma conjugacy |
+| $\tau^2$ | Inverse-Gamma | Gibbs | Inverse-Gamma conjugacy |
+| $\phi$ | Nonstandard | Metropolis--Hastings | No standard conjugate form |
+
+For $\phi$,
+
+$$
+f(\mathbf W\mid\sigma^2,\phi)
+\propto
+|\mathbf R(\phi)|^{-1/2}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W\right\}.
+$$
+
+Multiplying this expression by a Gamma prior does not produce a standard named distribution.
+
+## 13.3 The Metropolis--Hastings solution
+
+Metropolis--Hastings only requires the unnormalised target density. Define
+
+$$
+h(\phi)
+=|\sigma^2\mathbf R(\phi)|^{-1/2}
+\exp\left\{-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W\right\}
+\pi(\phi).
+$$
+
+Then
+
+$$
+\pi(\phi\mid\mathbf W,\sigma^2)\propto h(\phi).
+$$
+
+- Metropolis--Hastings algorithm
+
+```{r, eval=FALSE}
+# Step 1: Transform to the unconstrained log scale
+eta_current <- log(phi_current)
+
+# Step 2: Propose a new value
+eta_proposed <- rnorm(
+  1,
+  mean = eta_current,
+  sd = phi_proposal_sd
+)
+
+# Step 3: Transform back
+phi_proposed <- exp(eta_proposed)
+
+# Step 4: Compute log target densities on the eta scale
+log_target_current <-
+  log_conditional(W, sigma2, phi_current) + eta_current
+
+log_target_proposed <-
+  log_conditional(W, sigma2, phi_proposed) + eta_proposed
+
+# Step 5: Compute the log acceptance ratio
+log_acceptance_ratio <-
+  log_target_proposed - log_target_current
+
+# Step 6: Accept or reject
+if (log(runif(1)) < log_acceptance_ratio) {
+  phi_current <- phi_proposed
+}
+```
+
+- R code implementment
+
+```{r, eval=FALSE}
+# Random-walk MH on eta = log(phi)
+eta_current <- log(phi_current)
+eta_proposed <- rnorm(
+  1,
+  mean = eta_current,
+  sd = phi_proposal_sd
+)
+
+phi_proposed <- exp(eta_proposed)
+R_proposed <- make_correlation(phi_proposed)
+
+# Log target for the current value
+log_target_current <- dmvnorm(
+  W_current,
+  mean = rep(0, n),
+  sigma = sigma2_current * R_current,
+  log = TRUE
+) + dgamma(
+  phi_current,
+  shape = priors$phi_shape,
+  rate = priors$phi_rate,
+  log = TRUE
+) + eta_current
+
+# Log target for the proposed value
+log_target_proposed <- dmvnorm(
+  W_current,
+  mean = rep(0, n),
+  sigma = sigma2_current * R_proposed,
+  log = TRUE
+) + dgamma(
+  phi_proposed,
+  shape = priors$phi_shape,
+  rate = priors$phi_rate,
+  log = TRUE
+) + eta_proposed
+
+# Accept or reject
+log_acceptance_ratio <-
+  log_target_proposed - log_target_current
+
+if (
+  is.finite(log_acceptance_ratio) &&
+  log(runif(1)) < log_acceptance_ratio
+) {
+  phi_current <- phi_proposed
+  R_current <- R_proposed
+  phi_accepted[i] <- TRUE
+}
+```
+
+## 13.4 Mathematical equivalence
+
+The multivariate Normal log density contributes
+
+$$
+-\frac12\log|\sigma^2\mathbf R(\phi)|
+-\frac{1}{2\sigma^2}
+\mathbf W^\mathsf T\mathbf R(\phi)^{-1}\mathbf W
++\text{constant}.
+$$
+
+The Gamma log prior contributes
+
+$$
+(a_\phi-1)\log\phi-b_\phi\phi+\text{constant}.
+$$
+
+The term $\eta=\log\phi$ is the log-Jacobian adjustment for transforming the target density from $\phi$ to $\eta$.
+
+## 13.5 A complete example
+
+```{r, eval=FALSE}
+# Setup
+set.seed(123)
+n <- 20
+coords <- matrix(runif(2 * n), ncol = 2)
+dist_mat <- as.matrix(dist(coords))
+
+# True parameters
+sigma2_true <- 0.8
+phi_true <- 1.5
+
+# Generate W
+R <- exp(-dist_mat / phi_true)
+L <- chol(sigma2_true * R)
+W <- as.numeric(t(L) %*% rnorm(n))
+
+# Prior parameters
+priors <- list(phi_shape = 2, phi_rate = 1)
+
+# Compute the unnormalised log conditional density
+log_conditional <- function(phi) {
+  R <- exp(-dist_mat / phi)
+  R_inv <- chol2inv(chol(R))
+
+  log_det <- -0.5 * as.numeric(
+    determinant(R, logarithm = TRUE)$modulus
+  )
+
+  quad_form <- -0.5 * drop(
+    crossprod(W, R_inv %*% W)
+  ) / sigma2_true
+
+  log_prior <- dgamma(
+    phi,
+    shape = priors$phi_shape,
+    rate = priors$phi_rate,
+    log = TRUE
+  )
+
+  log_det + quad_form + log_prior
+}
+
+# Evaluate the density on a grid
+phi_grid <- seq(0.1, 5, length.out = 100)
+log_density <- sapply(phi_grid, log_conditional)
+density <- exp(log_density - max(log_density))
+
+# Plot
+plot(
+  phi_grid,
+  density,
+  type = "l",
+  lwd = 2,
+  main = expression("Unnormalised posterior of " * phi),
+  xlab = expression(phi),
+  ylab = "Relative density"
+)
+
+abline(v = phi_true, col = "red", lwd = 2, lty = 2)
+
+legend(
+  "topright",
+  legend = expression("True " * phi),
+  col = "red",
+  lty = 2,
+  lwd = 2
+)
+```
+
+## 13.5 Why transform to the log scale?
+
+- Problem with sampling $\phi$ directly
+
+- $\phi$ must be positive: $\phi>0$.
+- A Normal random-walk proposal on the original scale can generate negative values.
+- Negative proposed values are outside the support of $\phi$.
+
+- Log transformation
+
+Define
+
+$$
+\eta=\log\phi.
+$$
+
+Then:
+
+- $\eta$ is unconstrained, with $\eta\in(-\infty,\infty)$;
+- a Normal proposal for $\eta$ always produces a positive $\phi^*=\exp(\eta^*)$; and
+- the transformed target includes a Jacobian adjustment.
+
+## 13.6 Jacobian adjustment
+
+Since
+
+$$
+\phi=e^\eta,
+\qquad
+\frac{d\phi}{d\eta}=e^\eta,
+$$
+
+the transformed density is
+
+$$
+\pi_\eta(\eta\mid\mathbf W,\sigma^2)
+=\pi_\phi(e^\eta\mid\mathbf W,\sigma^2)e^\eta.
+$$
+
+On the log scale,
+
+$$
+\log\pi_\eta(\eta\mid\cdot)
+=\log\pi_\phi(e^\eta\mid\cdot)+\eta.
+$$
+
+Therefore, the code includes `+ eta_current` and `+ eta_proposed`.
+
+## 13.7 The acceptance ratio
+
+The Metropolis--Hastings acceptance probability on the transformed scale is
+
+$$
+\alpha
+=\min\left\{
+1,
+\frac{\pi_\eta(\eta^*\mid\mathbf W,\sigma^2)
+q(\eta\mid\eta^*)}
+{\pi_\eta(\eta\mid\mathbf W,\sigma^2)
+q(\eta^*\mid\eta)}
+\right\}.
+$$
+
+The Normal random-walk proposal is symmetric:
+
+$$
+q(\eta^*\mid\eta)=q(\eta\mid\eta^*).
+$$
+
+Consequently,
+
+$$
+\alpha
+=\min\left\{
+1,
+\frac{\pi_\phi(\phi^*\mid\mathbf W,\sigma^2)\phi^*}
+{\pi_\phi(\phi\mid\mathbf W,\sigma^2)\phi}
+\right\}.
+$$
+
+Equivalently, the log acceptance ratio is
+
+$$
+\log A
+=\log\pi_\phi(\phi^*\mid\cdot)
+-\log\pi_\phi(\phi\mid\cdot)
++\eta^*-\eta.
+$$
+
+The proposed value is accepted when
+
+$$
+\log U<\log A,
+\qquad U\sim\operatorname{Uniform}(0,1).
+$$
+
+## 13.8 Summary
+
+| Aspect | $\boldsymbol\beta$, $\mathbf W$, $\sigma^2$, $\tau^2$ | $\phi$ |
+|:---|:---|:---|
+| Full conditional | Standard closed form | Nonstandard form |
+| Distribution | Normal or Inverse-Gamma | No standard named distribution |
+| Sampling | Gibbs sampling | Metropolis--Hastings |
+| Reason | Conjugacy | No standard conjugate prior |
+| Acceptance | Direct draw | Proposed draw may be rejected |
+| Tuning | None for direct Gibbs draw | Proposal standard deviation required |
+
+
+
+# 14 Fit the spatial models using above R code
+
+## 14.1 Fit exponential spatial model
+```{r, message=FALSE,warning=FALSE}
+
+# FIT EXPONENTIAL SPATIAL MODEL 
+
+set.seed(54321)
+
+
+priors_default <- list(
+  beta_mean = 0,
+  beta_var = 1000,
+  sigma2_shape = 2,
+  sigma2_rate = 1,
+  tau2_shape = 2,
+  tau2_rate = 1,
+  phi_shape = 2,
+  phi_rate = 1
+)
+
+mcmc_exp <- run_spatial_mcmc(
+  data = litho2,
+  response = "log_Thickness",
+  covariates = c(
+    "Surf_Elevation_scaled",
+    "AB_Elevation_scaled"
+  ),
+  coords = litho2[, c("Easting", "Northing")],
+  n_iter = 10000,
+  burnin = 5000,
+  thin = 5,
+  cov_family = "exponential",
+  priors = priors_default,
+  initial_values = list(
+    beta = NULL,
+    W = NULL,
+    sigma2 = 0.5,
+    tau2 = 0.2,
+    phi = 1
+  ),
+  phi_proposal_sd = 0.15,
+  progress_every = 1000
+)
+```
+
+## 14.2 Fit Matern spatial model
+
+```{r, message=FALSE,warning=FALSE}
+
+# Matérn covariance with smoothness kappa = nu = 1.5. The run_spatial_mcmc()
+# function fixes nu at 1.5 and estimates sigma2, tau2 and phi.
+
+mcmc_matern <- run_spatial_mcmc(
+  data = litho2,
+  response = "log_Thickness",
+  covariates = c(
+    "Surf_Elevation_scaled",
+    "AB_Elevation_scaled"
+  ),
+  coords = litho2[, c("Easting", "Northing")],
+  n_iter = 10000,
+  burnin = 5000,
+  thin = 5,
+  cov_family = "matern",
+  priors = priors_default,
+  initial_values = list(
+    beta = NULL,
+    W = NULL,
+    sigma2 = 0.5,
+    tau2 = 0.2,
+    phi = 1
+  ),
+  phi_proposal_sd = 0.15,
+  progress_every = 1000
+)
+
+```
+
+## 14.3  Function for posterior summary and diagnosie
+
+```{r, message=FALSE, warnging=FALSE}
+
+# POSTERIOR SUMMARY AND DIAGNOSTICS 
+
+summarise_mcmc_model <- function(fit, model_name) {
+  posterior_matrix <- as.matrix(fit$samples)
+
+  posterior_summary <- t(apply(
+    posterior_matrix,
+    2,
+    function(x) {
+      c(
+        Mean = mean(x),
+        SD = sd(x),
+        Median = median(x),
+        `2.5%` = unname(quantile(x, 0.025)),
+        `97.5%` = unname(quantile(x, 0.975))
+      )
+    }
+  ))
+
+  cat("\n===", toupper(model_name), "POSTERIOR SUMMARY ===\n")
+  print(round(posterior_summary, 4))
+
+  cat(
+    "\n", model_name, "phi acceptance rate:",
+    round(fit$acceptance_rate, 3), "\n"
+  )
+
+  if (fit$acceptance_rate < 0.20) {
+    cat("Acceptance is low: consider reducing phi_proposal_sd.\n")
+  } else if (fit$acceptance_rate > 0.50) {
+    cat("Acceptance is high: consider increasing phi_proposal_sd.\n")
+  } else {
+    cat("The phi acceptance rate is in a reasonable range.\n")
+  }
+
+  # These diagnostics are protected so that a degenerate chain cannot
+  # destroy the fitted model object.
+  effective_sample_sizes <- tryCatch(
+    coda::effectiveSize(fit$samples),
+    error = function(e) {
+      warning(model_name, " effectiveSize failed: ", conditionMessage(e))
+      setNames(rep(NA_real_, ncol(posterior_matrix)), colnames(posterior_matrix))
+    }
+  )
+
+  cat("\n===", toupper(model_name), "EFFECTIVE SAMPLE SIZES ===\n")
+  print(effective_sample_sizes)
+
+  autocorrelation <- tryCatch(
+    coda::autocorr.diag(fit$samples, lags = c(1, 5, 10, 20)),
+    error = function(e) {
+      warning(model_name, " autocorr.diag failed: ", conditionMessage(e))
+      NULL
+    }
+  )
+
+  if (!is.null(autocorrelation)) {
+    cat("\n===", toupper(model_name), "AUTOCORRELATIONS ===\n")
+    print(round(autocorrelation, 3))
+  }
+
+  list(
+    posterior_matrix = posterior_matrix,
+    posterior_summary = posterior_summary,
+    effective_sample_sizes = effective_sample_sizes,
+    autocorrelation = autocorrelation
+  )
+}
+
+```
+
+## 14.4 Results for exponential spatial model
+
+```{r, message=FALSE, warning=FALSE}
+
+options(scipen = 999)
+diagnostics_exp <- summarise_mcmc_model(mcmc_exp, "Exponential")
+diagnostics_exp
+plot( mcmc_exp$samples[, c( "beta_0", "beta_1", "beta_2" )])
+plot( mcmc_exp$samples[, c(  "sigma2", "tau2", "phi")])
+
+
+```
+
+## 14.5 Results for Matern spatial model
+
+```{r, message=FALSE, warning=FALSE}
+options(scipen = 999)
+diagnostics_matern <- summarise_mcmc_model(mcmc_matern, "Matern nu=1.5")
+diagnostics_matern
+plot( mcmc_matern$samples[, c( "beta_0", "beta_1", "beta_2" )])
+plot( mcmc_matern$samples[, c(  "sigma2", "tau2", "phi")])
+
+```
+
+# 15 Use R package spBayes to fit the Bayesian spatial regression model
+
+In fact, we do not need to write our own R function to conduct the Bayesian spatial regression models. Below we use spBayes::spLM() to run the analysis.
+
+
+## 15.1 Prepare coordinates
+
+The coordinates should be rescaled because large coordinate values can make the spatial decay parameter difficult to estimate.
+
+
+```{r, message=FALSE,warning=FALSE}
+
+# PREPARE COORDINATES ----------------------------------------------
+library(tidyverse)
+library(spBayes)
+library(coda)
+# Convert coordinates to kilometres if the original units are metres
+coords <- as.matrix(
+  litho2[, c("Easting", "Northing")]
+) / 1000
+
+colnames(coords) <- c("Easting_km", "Northing_km")
+
+# Maximum pairwise distance
+max_distance <- max(spBayes::iDist(coords))
+
+max_distance
+
+```
+
+In **spBayes**, the exponential correlation function is parameterised as
+
+$$R_{ij} = \exp(-\phi d_{ij}).$$
+
+Therefore, $\phi$ is a spatial decay parameter. This differs from your custom function, which used
+
+$$R_{ij} = \exp\left(-\frac{\phi}{\text{range}} d_{ij}\right).$$
+
+The two parameters are related by
+
+$$\phi_{\text{spBayes}} = \frac{1}{\phi_{\text{range}}}.$$
+
+For the exponential covariance, the practical spatial range—where correlation is approximately 0.05—is
+
+$$d_{0.05} \approx \frac{3}{\phi}.$$
+
+## 15.2 Priors and starting values
+
+`spLM()` uses:
+
+- $\sigma^2 \sim \text{IG}(a_\sigma, b_\sigma)$
+- $\tau^2 \sim \text{IG}(a_\tau, b_\tau)$
+
+and a **Uniform** prior for $\phi$.
+
+
+```{r, message=FALSE, warning=FALSE}
+# PRIOR AND MCMC SETTINGS ------------------------------------------
+
+response_variance <- var(litho2$log_Thickness)
+
+# Phi bounds based on the maximum distance
+phi_lower <- 3 / max_distance
+phi_upper <- 300 / max_distance
+
+# Starting value corresponding to an effective range
+# of approximately half the maximum distance
+phi_start <- 3 / (0.5 * max_distance)
+
+starting_common <- list(
+  sigma.sq = 0.7 * response_variance,
+  tau.sq = 0.3 * response_variance,
+  phi = phi_start
+)
+
+tuning_common <- list(
+  sigma.sq = 0.05,
+  tau.sq = 0.05,
+  phi = 0.05
+)
+
+priors_common <- list(
+  sigma.sq.ig = c(0.1, 0.1),
+  tau.sq.ig = c(0.1, 0.1),
+  phi.unif = c(phi_lower, phi_upper)
+)
+
+starting_common
+priors_common
+
+
+```
+
+Unlike THE custom model, spLM() does not provide a Gamma prior for $\phi$; it uses a Uniform prior for the spatial decay parameter. The inverse-Gamma priors for the two variance components remain the same.
+
+
+## 15.3 Exponential covariance model
+
+```{r, message=FALSE, warning=FALSE}
+# FIT EXPONENTIAL COVARIANCE MODEL ---------------------------------
+
+set.seed(2026)
+
+fit_exponential <- spLM(
+  log_Thickness ~
+    Surf_Elevation_scaled +
+    AB_Elevation_scaled,
+
+  data = litho2,
+  coords = coords,
+
+  starting = starting_common,
+  tuning = tuning_common,
+  priors = priors_common,
+
+  cov.model = "exponential",
+
+  n.samples = 30000,
+  verbose = TRUE,
+  n.report = 1000
+)
+```
+
+The fitted object initially contains samples for the covariance parameters:
+
+```{r}
+names(fit_exponential)
+summary(fit_exponential$p.theta.samples)
+
+```
+
+Recover the regression coefficients and spatial random effects after discarding the first 10,000 iterations and retaining every tenth sample:
+
+```{r, message=FALSE, warning=FALSE}
+fit_exponential <- spRecover(
+  fit_exponential,
+  start = 10001,
+  end = 30000,
+  thin = 10,
+  get.beta = TRUE,
+  get.w = TRUE,
+  verbose = TRUE,
+  n.report = 500
+)
+
+```
+
+## 15.4 Matérn covariance model
+
+For the Matérn model, fix the smoothness parameter at
+
+$$\nu=1.5$$.
+
+Setting its tuning variance to zero tells spLM() not to update it.
+
+```{r, message=FALSE, warning=FALSE}
+# 6. FIT MATERN COVARIANCE MODEL --------------------------------------
+
+starting_matern <- c(
+  starting_common,
+  list(nu = 1.5)
+)
+
+tuning_matern <- c(
+  tuning_common,
+  list(nu = 0)
+)
+
+priors_matern <- c(
+  priors_common,
+  list(nu.unif = c(0.5, 2.5))
+)
+
+set.seed(2026)
+
+fit_matern <- spLM(
+  log_Thickness ~
+    Surf_Elevation_scaled +
+    AB_Elevation_scaled,
+
+  data = litho2,
+  coords = coords,
+
+  starting = starting_matern,
+  tuning = tuning_matern,
+  priors = priors_matern,
+
+  cov.model = "matern",
+
+  n.samples = 30000,
+  verbose = TRUE,
+  n.report = 1000
+)
+
+fit_matern <- spRecover(
+  fit_matern,
+  start = 10001,
+  end = 30000,
+  thin = 10,
+  get.beta = TRUE,
+  get.w = TRUE,
+  verbose = TRUE,
+  n.report = 500
+)
+```
+
+## 15.5 Posterior summaries
+
+```{r, message=FALSE, warning=FALSE}
+# 7. POSTERIOR SUMMARIES ----------------------------------------------
+
+cat("\nExponential covariance parameters\n")
+
+summary(
+  window(
+    fit_exponential$p.theta.samples,
+    start = 10001,
+    thin = 10
+  )
+)
+
+cat("\nExponential regression coefficients\n")
+
+summary(
+  fit_exponential$p.beta.recover.samples
+)
+
+
+cat("\nMatérn covariance parameters\n")
+
+summary(
+  window(
+    fit_matern$p.theta.samples,
+    start = 10001,
+    thin = 10
+  )
+)
+
+cat("\nMatérn regression coefficients\n")
+
+summary(
+  fit_matern$p.beta.recover.samples
+)
+```
+
+# 15.6 Create a concise posterior summary table:
+
+```{r, message=FALSE, warning=FALSE}
+posterior_summary <- function(samples, model_name) {
+
+  samples <- as.matrix(samples)
+
+  tibble(
+    Model = model_name,
+    Parameter = colnames(samples),
+    Mean = apply(samples, 2, mean),
+    SD = apply(samples, 2, sd),
+    Median = apply(samples, 2, median),
+    Lower_95 = apply(
+      samples,
+      2,
+      quantile,
+      probs = 0.025
+    ),
+    Upper_95 = apply(
+      samples,
+      2,
+      quantile,
+      probs = 0.975
+    )
+  )
+}
+
+beta_summary <- bind_rows(
+  posterior_summary(
+    fit_exponential$p.beta.recover.samples,
+    "Exponential"
+  ),
+  posterior_summary(
+    fit_matern$p.beta.recover.samples,
+    "Matern"
+  )
+)
+
+beta_summary
+```
+ 
+ 
+### 15.6.1 Resuts from the customer MCMC function of exponential spatial model
+
+```{r,message=FALSE,warning=FALSE}
+diagnostics_exp$posterior_summary
+
+```
+### 15.6.2 Resuts from the customer MCMC function of Matern spatial model 
+ 
+
+```{r,message=FALSE,warning=FALSE}
+diagnostics_matern$posterior_summary
+
+```
+
+## 15.7 MCMC diagnostic plots
+
+Each parameter will have its own trace plot and posterior density plot. The model name should be used as the overall title, not as the name of every parameter.
+
+```{r, message=FALSE, warning=FALSE}
+# 8. MCMC DIAGNOSTICS -------------------------------------------------
+
+theta_exp <- window(
+  fit_exponential$p.theta.samples,
+  start = 10001,
+  thin = 10
+)
+
+theta_mat <- window(
+  fit_matern$p.theta.samples,
+  start = 10001,
+  thin = 10
+)
+
+# Exponential covariance parameters
+plot(
+  theta_exp
+  )
+
+# Exponential regression coefficients
+plot(
+  fit_exponential$p.beta.recover.samples
+)
+
+# Matérn covariance parameters
+par(mar = c(2, 2, 2, 2))
+plot(
+  theta_mat
+  )
+
+
+# Matérn regression coefficients
+plot(
+  fit_matern$p.beta.recover.samples
+ )
+```
+
+## 15.8 Additional numerical diagnostics
+
+```{r, message=FALSE, warning=FALSE}
+# Effective sample sizes
+effectiveSize(theta_exp)
+effectiveSize(theta_mat)
+
+effectiveSize(
+  fit_exponential$p.beta.recover.samples
+)
+
+effectiveSize(
+  fit_matern$p.beta.recover.samples
+)
+
+# Geweke convergence diagnostics
+geweke.diag(theta_exp)
+geweke.diag(theta_mat)
+
+geweke.diag(
+  fit_exponential$p.beta.recover.samples
+)
+
+geweke.diag(
+  fit_matern$p.beta.recover.samples
+)
+
+```
+
+## 15.9 Convert $\phi$ into practical spatial range
+For the exponential model:
+```{r, message=FALSE,warning=FALSE}
+phi_exp <- as.matrix(theta_exp)[, "phi"]
+
+effective_range_exp <- 3 / phi_exp
+
+quantile(
+  effective_range_exp,
+  probs = c(0.025, 0.5, 0.975)
+)
+```
+
+This is now a package-based analysis: spLM() performs the MCMC estimation, while  spRecover() generates posterior samples for $\beta$ and W(s). The current spBayes documentation confirms that spLM() supports exponential and Matérn covariance models, inverse-Gamma priors for $\sigma^2$ and $\tau^2$, a Uniform prior for phi, and a flat default prior for the regression coefficients. CRAN spLM documentation
+
+
+
+
+

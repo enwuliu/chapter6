@@ -1,0 +1,1572 @@
+---
+title: "Understanding Spatial MCMC: A Comprehensive Guide"
+author: "Your Name"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: readable
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# Introduction
+
+This document provides a comprehensive explanation of the `run_spatial_mcmc` function, which implements a Bayesian spatial linear regression model using Markov Chain Monte Carlo (MCMC) sampling. We'll break down the statistical model, the mathematical foundations, and each step of the MCMC algorithm.
+
+# 1. The Statistical Model
+
+The model assumes:
+
+$$Y = X\beta + W + \varepsilon$$
+
+Where:
+- $Y$: Response variable ($n \times 1$)
+- $X$: Design matrix ($n \times p$) of covariates
+- $\beta$: Regression coefficients ($p \times 1$)
+- $W$: Spatial random effects ($n \times 1$) with $W \sim \mathcal{MVN}(0, \sigma^2 R(\phi))$
+- $\varepsilon$: Independent errors with $\varepsilon \sim \mathcal{MVN}(0, \tau^2 I)$
+
+## 1.1 Spatial Correlation Functions
+
+The spatial correlation matrix $R(\phi)$ depends on the distance between locations:
+
+### Exponential Correlation:
+$$R(\phi)_{ij} = \exp\left(-\frac{d_{ij}}{\phi}\right)$$
+
+### Matérn Correlation (with $\kappa = 1.5$):
+$$R(\phi)_{ij} = \left(1 + \frac{d_{ij}}{\phi}\right) \exp\left(-\frac{d_{ij}}{\phi}\right)$$
+
+Where $d_{ij}$ is the distance between locations $i$ and $j$, and $\phi$ is the spatial range parameter.
+
+# 2. Prior Distributions
+
+The function uses conjugate priors:
+
+## Regression Coefficients ($\beta$)
+$$\beta \sim \mathcal{MVN}(\beta_{\text{mean}}, \beta_{\text{var}} \cdot I)$$
+Where $\beta_{\text{mean}} = 0$ and $\beta_{\text{var}} = 1000$ (vague prior)
+
+## Spatial Variance ($\sigma^2$)
+$$\sigma^2 \sim \text{Inverse-Gamma}(\alpha_{\sigma} = 2, \beta_{\sigma} = 1)$$
+
+## Error Variance ($\tau^2$)
+$$\tau^2 \sim \text{Inverse-Gamma}(\alpha_{\tau} = 2, \beta_{\tau} = 1)$$
+
+## Spatial Range ($\phi$)
+$$\phi \sim \text{Gamma}(\alpha_{\phi} = 2, \beta_{\phi} = 1)$$
+
+# 3. The `rmvn_precision` Function
+
+```{r}
+rmvn_precision <- function(precision, linear_term) {
+  U <- chol(precision)
+  posterior_mean <- backsolve(U, forwardsolve(t(U), linear_term))
+  random_part <- backsolve(U, rnorm(length(linear_term)))
+  as.numeric(posterior_mean + random_part)
+}
+```
+
+## 3.1 Mathematical Foundation
+
+This function samples from a multivariate normal distribution parameterized by its **precision matrix** (inverse covariance matrix):
+
+$$X \sim \mathcal{N}(\mu, \Sigma)$$
+
+But instead of providing $\Sigma$ (the covariance matrix), we provide:
+- **`precision`**: The precision matrix $Q = \Sigma^{-1}$
+- **`linear_term`**: The vector $b = Q\mu$ (precision times mean)
+
+So we're sampling from:
+
+$$X \sim \mathcal{N}(Q^{-1}b, Q^{-1})$$
+
+## 3.2 The Algorithm Steps
+
+### Step 1: Cholesky Decomposition
+```{r eval=FALSE}
+U <- chol(precision)
+```
+
+The Cholesky decomposition factors the precision matrix as:
+
+$$Q = U^T U$$
+
+where $U$ is an upper triangular matrix.
+
+### Step 2: Compute the Posterior Mean
+```{r eval=FALSE}
+posterior_mean <- backsolve(U, forwardsolve(t(U), linear_term))
+```
+
+This solves the system:
+
+$$Q\mu = b \implies U^T U \mu = b$$
+
+### Step 3: Generate Random Noise
+```{r eval=FALSE}
+random_part <- backsolve(U, rnorm(length(linear_term)))
+```
+
+We generate $Z \sim \mathcal{N}(0, I)$ and transform:
+
+$$Y = U^{-1}Z \sim \mathcal{N}(0, Q^{-1})$$
+
+### Step 4: Combine
+```{r eval=FALSE}
+as.numeric(posterior_mean + random_part)
+```
+
+The final sample is:
+
+$$X = \mu + Y \sim \mathcal{N}(\mu, Q^{-1})$$
+
+## 3.3 Mathematical Verification
+
+**Mean**:
+$$\mathbb{E}[X] = Q^{-1}b = \mu$$
+
+**Covariance**:
+$$\text{Var}(X) = \text{Var}(U^{-1}Z) = U^{-1} \text{Var}(Z)(U^{-1})^T = U^{-1}I(U^{-1})^T = (U^T U)^{-1} = Q^{-1}$$
+
+## 3.4 Why This Approach is Efficient
+
+1. **Computational efficiency**: In spatial models, precision matrices are often sparse
+2. **Numerical stability**: Avoids inverting potentially ill-conditioned covariance matrices
+3. **Natural for GMRFs**: Many spatial models are naturally expressed in terms of precision matrices
+
+# 4. The MCMC Algorithm - Step by Step
+
+## 4.1 Update $\beta$ (Regression Coefficients)
+
+### Full Conditional Distribution:
+$$\beta \mid Y, W, \tau^2 \sim \mathcal{MVN}(\mu_{\beta}, V_{\beta})$$
+
+Where:
+$$V_{\beta} = \left(\frac{X^T X}{\tau^2} + P_{\beta}\right)^{-1}$$
+$$\mu_{\beta} = V_{\beta} \left(\frac{X^T(Y - W)}{\tau^2} + P_{\beta}\beta_{\text{prior}}\right)$$
+
+Here $P_{\beta} = \text{diag}(1/\beta_{\text{var}})$ is the prior precision matrix.
+
+### Why the Precision Matrix is $X^TX/\tau^2 + P_\beta$
+
+This comes from **Bayesian linear regression theory**. The posterior precision is the sum of:
+
+$$\text{Posterior Precision} = \underbrace{\frac{X^TX}{\tau^2}}_{\text{Data Precision}} + \underbrace{P_{\beta}}_{\text{Prior Precision}}$$
+
+**Intuition**:
+- More data ($X^TX$ grows with $n$) = more precision
+- Less noise (smaller $\tau^2$) = more precision
+- Stronger prior (smaller prior variance) = more precision
+
+### Implementation:
+```{r eval=FALSE}
+beta_precision <- crossprod(X) / tau2_current + beta_prior_precision
+beta_linear_term <- crossprod(X, Y - W_current) / tau2_current + 
+                   beta_prior_precision %*% beta_prior_mean
+beta_current <- rmvn_precision(beta_precision, beta_linear_term)
+```
+
+## 4.2 Update $W$ (Spatial Random Effects)
+
+### Full Conditional Distribution:
+$$W \mid Y, \beta, \sigma^2, \tau^2, \phi \sim \mathcal{MVN}(\mu_W, V_W)$$
+
+Where:
+$$V_W = \left(\frac{1}{\tau^2}I + \frac{R^{-1}}{\sigma^2}\right)^{-1}$$
+$$\mu_W = V_W \left(\frac{Y - X\beta}{\tau^2}\right)$$
+
+### Understanding $\sigma^2 R^{-1}$
+
+$\sigma^2 R^{-1}$ represents the **precision matrix** (inverse covariance) of $W$ **scaled by** $\sigma^2$:
+
+$$\text{Precision of } W = \frac{1}{\sigma^2}R^{-1}$$
+
+#### Two Sources of Information:
+
+1. **Data Fit**: $\frac{1}{\tau^2}I$ - How well $W$ explains the residuals
+2. **Spatial Prior**: $\frac{1}{\sigma^2}R^{-1}$ - Enforces spatial smoothness
+
+#### What is $R^{-1}$?
+
+For exponential correlation, $R^{-1}$ approximates a **second-order difference operator** (like a Laplacian), which:
+- Penalizes deviations from smoothness
+- Adjacent locations have negative correlations in the precision matrix
+- Enforces smooth spatial patterns
+
+### Implementation:
+```{r eval=FALSE}
+R_current <- make_correlation(phi_current)
+R_inverse <- chol2inv(chol(R_current))
+W_precision <- diag(1 / tau2_current, n) + R_inverse / sigma2_current
+W_linear_term <- as.numeric(Y - X %*% beta_current) / tau2_current
+W_current <- rmvn_precision(W_precision, W_linear_term)
+```
+
+### Intuitive Interpretation:
+
+| Scenario | Effect on $W$ |
+|----------|---------------|
+| Large $\sigma^2$ | Weak spatial prior, $W$ can vary freely |
+| Small $\sigma^2$ | Strong spatial prior, $W$ must be smooth |
+| Small $\tau^2$ | Data precision high, $W$ fits residuals closely |
+| Large $\tau^2$ | Data precision low, $W$ follows spatial prior |
+
+## 4.3 Update $\sigma^2$ (Spatial Variance)
+
+### Full Conditional Distribution:
+$$\sigma^2 \mid W, \phi \sim \text{Inverse-Gamma}(\alpha_{\sigma^*}, \beta_{\sigma^*})$$
+
+Where:
+$$\alpha_{\sigma^*} = \alpha_{\sigma} + \frac{n}{2}$$
+$$\beta_{\sigma^*} = \beta_{\sigma} + \frac{1}{2}W^T R^{-1} W$$
+
+### Implementation:
+```{r eval=FALSE}
+sigma2_shape <- priors$sigma2_shape + n / 2
+sigma2_rate <- priors$sigma2_rate + 0.5 * drop(crossprod(W_current, R_inverse %*% W_current))
+sigma2_current <- 1 / rgamma(1, shape = sigma2_shape, rate = sigma2_rate)
+```
+
+### Mathematical Note:
+The quadratic form $W^T R^{-1} W$ measures how well $W$ fits the spatial correlation structure.
+
+## 4.4 Update $\tau^2$ (Error Variance)
+
+### Full Conditional Distribution:
+$$\tau^2 \mid Y, \beta, W \sim \text{Inverse-Gamma}(\alpha_{\tau^*}, \beta_{\tau^*})$$
+
+Where:
+$$\alpha_{\tau^*} = \alpha_{\tau} + \frac{n}{2}$$
+$$\beta_{\tau^*} = \beta_{\tau} + \frac{1}{2}(Y - X\beta - W)^T(Y - X\beta - W)$$
+
+### Implementation:
+```{r eval=FALSE}
+residual <- as.numeric(Y - X %*% beta_current - W_current)
+tau2_shape <- priors$tau2_shape + n / 2
+tau2_rate <- priors$tau2_rate + 0.5 * sum(residual^2)
+tau2_current <- 1 / rgamma(1, shape = tau2_shape, rate = tau2_rate)
+```
+
+## 4.5 Update $\phi$ (Spatial Range) - Metropolis-Hastings
+
+This is the only non-conjugate update, so we use a Metropolis-Hastings step on $\eta = \log(\phi)$.
+
+### Why $\eta = \log(\phi)$?
+
+#### Problems with Direct $\phi$ Update:
+1. **Constraint issue**: $\phi > 0$, normal proposals can give negative values
+2. **Boundary effects**: Asymmetric proposal near 0
+3. **Scale dependence**: Optimal step size depends on $\phi$'s scale
+
+#### Benefits of Log-Transformation:
+1. **Unconstrained parameter space**: $\eta \in (-\infty, \infty)$
+2. **Better mixing**: Posterior often more Gaussian-like
+3. **Scale-adaptive**: Fixed proposal variance works across scales
+
+### The Proposal:
+$$\eta_{\text{current}} = \log(\phi_{\text{current}})$$
+$$\eta_{\text{proposed}} \sim \mathcal{N}(\eta_{\text{current}}, \sigma_{\eta}^2)$$
+$$\phi_{\text{proposed}} = \exp(\eta_{\text{proposed}})$$
+
+### Implementation:
+```{r eval=FALSE}
+eta_current <- log(phi_current)
+eta_proposed <- rnorm(1, eta_current, phi_proposal_sd)
+phi_proposed <- exp(eta_proposed)
+```
+
+# 5. Understanding the Metropolis-Hastings Acceptance Ratio for $\phi$
+
+## 5.1 The General Metropolis-Hastings Framework
+
+In Metropolis-Hastings, we accept a proposed value with probability:
+
+$$\alpha = \min\left(1, \frac{\pi(\theta^*) \cdot L(\theta^*) \cdot q(\theta^* \to \theta)}{\pi(\theta) \cdot L(\theta) \cdot q(\theta \to \theta^*)}\right)$$
+
+Where:
+- $\pi(\theta)$ = Prior probability of $\theta$
+- $L(\theta)$ = Likelihood of data given $\theta$
+- $q(\theta \to \theta^*)$ = Proposal distribution (probability of proposing $\theta^*$ given current $\theta$)
+
+## 5.2 Our Specific Case: The Acceptance Ratio
+
+In our code, we're proposing a new value for $\phi$ using:
+
+$$\eta^* = \eta + \text{noise}, \quad \text{where } \text{noise} \sim \mathcal{N}(0, \sigma_{\eta}^2)$$
+
+Since the proposal is symmetric ($q(\eta \to \eta^*) = q(\eta^* \to \eta)$), the proposal ratio cancels out:
+
+$$\alpha = \min\left(1, \frac{\pi(\phi^*) \cdot L(W|\phi^*) \cdot \phi^*}{\pi(\phi) \cdot L(W|\phi) \cdot \phi}\right)$$
+
+Taking logs to avoid numerical underflow:
+
+$$\log(\alpha) = \min\left(0, \log \pi(\phi^*) + \log L(W|\phi^*) + \log(\phi^*) - \log \pi(\phi) - \log L(W|\phi) - \log(\phi)\right)$$
+
+In the code, this is implemented as:
+
+```{r eval=FALSE}
+log_target_proposed - log_target_current
+```
+
+where:
+```{r eval=FALSE}
+log_target_current = log π(φ_current) + log L(W|φ_current) + log(φ_current)
+log_target_proposed = log π(φ_proposed) + log L(W|φ_proposed) + log(φ_proposed)
+```
+
+## 5.3 Breaking Down Each Component
+
+### Component 1: $\log \pi(\phi)$ - The Prior
+
+This is the log of the Gamma prior density:
+
+$$\pi(\phi) = \frac{\beta^{\alpha}}{\Gamma(\alpha)} \phi^{\alpha-1} e^{-\beta\phi}$$
+
+Taking logs:
+
+$$\log \pi(\phi) = \alpha \log(\beta) - \log(\Gamma(\alpha)) + (\alpha-1)\log(\phi) - \beta\phi$$
+
+In the code:
+```{r eval=FALSE}
+dgamma(phi_current, shape = priors$phi_shape, 
+       rate = priors$phi_rate, log = TRUE)
+```
+
+**Interpretation:** This penalizes values of $\phi$ that are unlikely under our prior. If $\phi$ is far from the prior mean, this term will be smaller (more negative), making acceptance less likely.
+
+### Component 2: $\log L(W|\phi)$ - The Likelihood
+
+This is the log-likelihood of the spatial random effects $W$ given $\phi$:
+
+$$L(W|\phi) = (2\pi\sigma^2)^{-n/2} |R(\phi)|^{-1/2} \exp\left(-\frac{1}{2\sigma^2} W^T R(\phi)^{-1} W\right)$$
+
+Taking logs:
+
+$$\log L(W|\phi) = -\frac{n}{2}\log(2\pi) - \frac{n}{2}\log(\sigma^2) - \frac{1}{2}\log|R(\phi)| - \frac{1}{2\sigma^2} W^T R(\phi)^{-1} W$$
+
+In the code:
+```{r eval=FALSE}
+dmvnorm(W_current, mean = rep(0, n), 
+        sigma = sigma2_current * R_current, log = TRUE)
+```
+
+**Interpretation:** This measures how well the spatial correlation structure (defined by $\phi$) explains the observed spatial patterns in $W$. If $\phi$ makes the spatial structure fit $W$ better, this term will be larger.
+
+### Component 3: $\log(\phi)$ - The Jacobian
+
+This is the Jacobian from transforming $\phi$ to $\eta = \log(\phi)$:
+
+$$\left|\frac{d\phi}{d\eta}\right| = \left|\frac{d}{d\eta}\exp(\eta)\right| = \exp(\eta) = \phi$$
+
+In the code:
+```{r eval=FALSE}
+eta_current  # This is log(phi_current)
+```
+
+**Interpretation:** This accounts for the fact that we're proposing on the log scale. Without this term, we'd be sampling from the wrong distribution because the prior on $\phi$ doesn't equal the prior on $\log(\phi)$.
+
+## 5.4 The Complete Log-Target in Code
+
+```{r eval=FALSE}
+log_target_current <- 
+    dmvnorm(W_current, mean = rep(0, n), 
+           sigma = sigma2_current * R_current, log = TRUE) +  # log L(W|φ)
+    dgamma(phi_current, shape = priors$phi_shape,              # log π(φ)
+           rate = priors$phi_rate, log = TRUE) +
+    eta_current  # log(φ) Jacobian
+
+log_target_proposed <- 
+    dmvnorm(W_current, mean = rep(0, n), 
+           sigma = sigma2_current * R_proposed, log = TRUE) +  # log L(W|φ*)
+    dgamma(phi_proposed, shape = priors$phi_shape,              # log π(φ*)
+           rate = priors$phi_rate, log = TRUE) +
+    eta_proposed  # log(φ*) Jacobian
+```
+
+## 5.5 The Decision Rule
+
+The acceptance ratio determines whether we move to the proposed value:
+
+```{r eval=FALSE}
+if (is.finite(log_acceptance_ratio) && log(runif(1)) < log_acceptance_ratio) {
+    phi_current <- phi_proposed
+    R_current <- R_proposed
+    phi_accepted[i] <- TRUE
+}
+```
+
+### How it works:
+
+1. **Compute log acceptance ratio:**
+   $$\Delta = \log \pi(\phi^*) + \log L(W|\phi^*) + \log(\phi^*) - \log \pi(\phi) - \log L(W|\phi) - \log(\phi)$$
+
+2. **Generate random number:** $u \sim \text{Uniform}(0,1)$
+
+3. **Accept if:** $\log(u) < \Delta$ (which is equivalent to $u < \exp(\Delta)$)
+
+### When do we accept?
+
+| Scenario | What happens | Interpretation |
+|----------|--------------|----------------|
+| $\Delta > 0$ | Always accept | Proposed value has higher posterior density |
+| $\Delta < 0$ | Accept with probability $\exp(\Delta)$ | Proposed value has lower posterior density |
+
+## 5.6 A Numerical Example
+
+Let's trace through a concrete example to see how this works:
+
+### Setup:
+- Current $\phi = 1.0$, so $\eta = \log(1.0) = 0$
+- Proposed $\phi^* = 1.5$, so $\eta^* = \log(1.5) = 0.405$
+- Prior: Gamma(shape=2, rate=1)
+- Current log-likelihood: -10.0
+- Proposed log-likelihood: -8.5
+
+### Step 1: Compute current log-target
+
+```
+log_prior_current = dgamma(1.0, shape=2, rate=1, log=TRUE) = -1.0
+log_lik_current = -10.0
+jacobian_current = log(1.0) = 0
+log_target_current = -1.0 + (-10.0) + 0 = -11.0
+```
+
+### Step 2: Compute proposed log-target
+
+```
+log_prior_proposed = dgamma(1.5, shape=2, rate=1, log=TRUE) = -0.69
+log_lik_proposed = -8.5
+jacobian_proposed = log(1.5) = 0.405
+log_target_proposed = -0.69 + (-8.5) + 0.405 = -8.785
+```
+
+### Step 3: Compute acceptance ratio
+
+```
+log_acceptance_ratio = -8.785 - (-11.0) = 2.215
+acceptance_prob = exp(2.215) = 9.16
+alpha = min(1, 9.16) = 1.0
+```
+
+**Result:** We always accept because the proposed value has much higher posterior density!
+
+### Counter-Example: When we might reject
+
+If the proposed value had lower likelihood:
+- Current log-likelihood: -10.0
+- Proposed log-likelihood: -12.0
+- log_acceptance_ratio = -2.0
+- acceptance_prob = exp(-2.0) = 0.135
+
+**Result:** We accept with probability 13.5% and reject with probability 86.5%.
+
+## 5.7 Why This Makes Sense Intuitively
+
+The acceptance ratio is essentially comparing:
+
+$$\text{Posterior}(\phi^*) \cdot \phi^* \quad \text{vs.} \quad \text{Posterior}(\phi) \cdot \phi$$
+
+### Think of it this way:
+
+1. **Prior term**: Does $\phi^*$ make more sense given our prior beliefs?
+2. **Likelihood term**: Does $\phi^*$ explain the spatial structure better?
+3. **Jacobian term**: Are we accounting for the log-transformation correctly?
+
+The MCMC chain will naturally move toward regions of high posterior probability, while occasionally accepting worse proposals to explore the parameter space.
+
+## 5.8 Practical Implications
+
+### Tuning the Acceptance Rate
+
+The proposal standard deviation `phi_proposal_sd` controls the acceptance rate:
+
+- **Too small**: High acceptance rate (>50%), but slow exploration (random walk)
+- **Too large**: Low acceptance rate (<20%), many rejections (inefficient)
+- **Just right**: 20-40% acceptance rate (optimal for random-walk MH)
+
+### The Acceptance Rate in the Code
+
+The function tracks:
+```{r eval=FALSE}
+phi_accepted <- logical(n_iter)
+```
+and returns:
+```{r eval=FALSE}
+acceptance_rate = mean(phi_accepted[2:n_iter])
+```
+
+A good acceptance rate for this type of proposal is typically 20-40%. If it's outside this range, consider adjusting `phi_proposal_sd`.
+
+### Summary of the Acceptance Ratio
+
+The Metropolis-Hastings acceptance ratio for $\phi$:
+
+$$\alpha = \min\left(1, \exp(\log \pi(\phi^*) + \log L(W|\phi^*) + \log(\phi^*) - \log \pi(\phi) - \log L(W|\phi) - \log(\phi))\right)$$
+
+Is a **fairness criterion** that:
+1. Favors values with higher posterior density
+2. Sometimes accepts lower-density values to maintain exploration
+3. Correctly accounts for the log-transformation via the Jacobian
+4. Ensures the Markov chain converges to the correct target distribution
+
+# 6. Complete Mathematical Model Summary
+
+## Full Conditional Distributions:
+
+1. **$\beta \mid Y, W, \tau^2$**: 
+   $$\mathcal{MVN}\left(\left(\frac{X^TX}{\tau^2} + P_{\beta}\right)^{-1}\left(\frac{X^T(Y-W)}{\tau^2} + P_{\beta}\beta_{\text{prior}}\right), \left(\frac{X^TX}{\tau^2} + P_{\beta}\right)^{-1}\right)$$
+
+2. **$W \mid Y, \beta, \sigma^2, \tau^2, \phi$**: 
+   $$\mathcal{MVN}\left(\left(\frac{1}{\tau^2}I + \frac{R^{-1}}{\sigma^2}\right)^{-1}\left(\frac{Y-X\beta}{\tau^2}\right), \left(\frac{1}{\tau^2}I + \frac{R^{-1}}{\sigma^2}\right)^{-1}\right)$$
+
+3. **$\sigma^2 \mid W, \phi$**: 
+   $$\text{Inverse-Gamma}\left(\alpha_{\sigma} + \frac{n}{2}, \beta_{\sigma} + \frac{1}{2}W^T R^{-1} W\right)$$
+
+4. **$\tau^2 \mid Y, \beta, W$**: 
+   $$\text{Inverse-Gamma}\left(\alpha_{\tau} + \frac{n}{2}, \beta_{\tau} + \frac{1}{2}(Y-X\beta-W)^T(Y-X\beta-W)\right)$$
+
+5. **$\phi \mid W, \sigma^2$**: Metropolis-Hastings step on $\eta = \log(\phi)$
+
+## The Target Posterior:
+
+$$\pi(\beta, W, \sigma^2, \tau^2, \phi \mid Y) \propto$$
+$$[Y|\beta, W, \tau^2] \times [W|\sigma^2, \phi] \times [\beta] \times [\sigma^2] \times [\tau^2] \times [\phi]$$
+
+Where:
+$$[Y|\beta, W, \tau^2] \propto (\tau^2)^{-n/2} \exp\left(-\frac{1}{2\tau^2}(Y-X\beta-W)^T(Y-X\beta-W)\right)$$
+$$[W|\sigma^2, \phi] \propto (\sigma^2)^{-n/2}|R(\phi)|^{-1/2} \exp\left(-\frac{1}{2\sigma^2}W^T R(\phi)^{-1}W\right)$$
+
+# 7. Key Insights
+
+## The Precision-Addition Principle
+
+Throughout the MCMC algorithm, we see a recurring theme:
+
+$$\text{Posterior Precision} = \text{Data Precision} + \text{Prior Precision}$$
+
+This appears in:
+- **$\beta$ update**: $\frac{X^TX}{\tau^2} + P_{\beta}$
+- **$W$ update**: $\frac{1}{\tau^2}I + \frac{R^{-1}}{\sigma^2}$
+
+## Why This Matters
+
+1. **Numerical stability**: Working with precisions avoids inverting ill-conditioned matrices
+2. **Efficiency**: Precision matrices are often sparse in spatial models
+3. **Intuition**: Directly shows how data and prior combine
+
+## The Role of Spatial Parameters
+
+| Parameter | Meaning | Effect |
+|:-----------|:---------|:--------|
+| $\sigma^2$ | Spatial variance | How much spatial variation exists |
+| $\tau^2$ | Error variance | How much independent noise exists |
+| $\phi$ | Spatial range | How far spatial correlation extends |
+
+# 8. References and Further Reading
+
+1. Banerjee, S., Carlin, B. P., & Gelfand, A. E. (2014). *Hierarchical Modeling and Analysis for Spatial Data*. CRC Press.
+
+2. Cressie, N. A. C. (2015). *Statistics for Spatial Data*. John Wiley & Sons.
+
+3. Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., & Rubin, D. B. (2013). *Bayesian Data Analysis*. CRC Press.
+
+4. Gelfand, A. E., Diggle, P. J., Fuentes, M., & Guttorp, P. (2010). *Handbook of Spatial Statistics*. CRC Press.
+
+5. Robert, C. P., & Casella, G. (2004). *Monte Carlo Statistical Methods*. Springer.
+
+# 9. Exercises
+
+1. **Modify the priors**: Change the prior for $\phi$ and observe how the MCMC output changes
+2. **Explore acceptance rates**: Adjust `phi_proposal_sd` and monitor the acceptance rate
+3. **Add a new covariance function**: Implement a spherical correlation function
+4. **Prediction**: Use the posterior samples to predict at new locations
+5. **Convergence diagnostics**: Use the `coda` package to check MCMC convergence
+6. **Sensitivity analysis**: Change the prior hyperparameters and see how posterior estimates change
+7. **Visualization**: Create trace plots and density plots for all parameters
+
+
+## Full R code explanations
+
+
+# 1. The Statistical Model
+
+The model assumes:
+
+$$Y = X\beta + W + \varepsilon$$
+
+Where:
+- $Y$: Response variable ($n \times 1$)
+- $X$: Design matrix ($n \times p$) of covariates
+- $\beta$: Regression coefficients ($p \times 1$)
+- $W$: Spatial random effects ($n \times 1$) with $W \sim \mathcal{MVN}(0, \sigma^2 R(\phi))$
+- $\varepsilon$: Independent errors with $\varepsilon \sim \mathcal{MVN}(0, \tau^2 I)$
+
+## 1.1 Spatial Correlation Functions
+
+The spatial correlation matrix $R(\phi)$ depends on the distance between locations:
+
+### Exponential Correlation:
+$$R(\phi)_{ij} = \exp\left(-\frac{d_{ij}}{\phi}\right)$$
+
+### Matérn Correlation (with $\kappa = 1.5$):
+$$R(\phi)_{ij} = \left(1 + \frac{d_{ij}}{\phi}\right) \exp\left(-\frac{d_{ij}}{\phi}\right)$$
+
+Where $d_{ij}$ is the distance between locations $i$ and $j$, and $\phi$ is the spatial range parameter.
+
+# 2. Prior Distributions
+
+The function uses conjugate priors:
+
+## Regression Coefficients ($\beta$)
+$$\beta \sim \mathcal{MVN}(\beta_{\text{mean}}, \beta_{\text{var}} \cdot I)$$
+Where $\beta_{\text{mean}} = 0$ and $\beta_{\text{var}} = 1000$ (vague prior)
+
+## Spatial Variance ($\sigma^2$)
+$$\sigma^2 \sim \text{Inverse-Gamma}(\alpha_{\sigma} = 2, \beta_{\sigma} = 1)$$
+
+## Error Variance ($\tau^2$)
+$$\tau^2 \sim \text{Inverse-Gamma}(\alpha_{\tau} = 2, \beta_{\tau} = 1)$$
+
+## Spatial Range ($\phi$)
+$$\phi \sim \text{Gamma}(\alpha_{\phi} = 2, \beta_{\phi} = 1)$$
+
+# 3. The `rmvn_precision` Function
+
+```{r}
+rmvn_precision <- function(precision, linear_term) {
+  U <- chol(precision)
+  posterior_mean <- backsolve(U, forwardsolve(t(U), linear_term))
+  random_part <- backsolve(U, rnorm(length(linear_term)))
+  as.numeric(posterior_mean + random_part)
+}
+```
+
+## 3.1 Function Purpose and Inputs
+
+This function samples from a multivariate normal distribution using the **precision matrix** (inverse covariance) parameterization.
+
+**Inputs:**
+- `precision`: The precision matrix $Q = \Sigma^{-1}$ (positive definite)
+- `linear_term`: The vector $b = Q\mu$ (precision times mean)
+
+**Output:**
+- A single draw from $\mathcal{N}(Q^{-1}b, Q^{-1})$
+
+## 3.2 Detailed Code Explanation
+
+### Line 1: Cholesky Decomposition
+```{r eval=FALSE}
+U <- chol(precision)
+```
+
+**What it does:** 
+- Computes the Cholesky decomposition of the precision matrix
+- Returns an upper triangular matrix $U$ such that $Q = U^T U$
+
+**Why use Cholesky?**
+- Triangular matrices are easy to solve (forward/backward substitution)
+- More numerically stable than directly inverting $Q$
+- Exploits the positive definiteness of precision matrices
+
+**Example:**
+```{r}
+# Simple 2x2 example
+Q <- matrix(c(2, 1, 1, 2), nrow = 2)
+U <- chol(Q)
+print(U)
+# U^T %*% U should equal Q
+print(t(U) %*% U)
+```
+
+### Line 2: Compute Posterior Mean
+```{r eval=FALSE}
+posterior_mean <- backsolve(U, forwardsolve(t(U), linear_term))
+```
+
+**What it does:**
+Solves the linear system $Q\mu = b$ using two steps:
+
+**Step 2a: Forward Solve**
+```{r eval=FALSE}
+forwardsolve(t(U), linear_term)
+```
+- Solves $U^T z = b$ for $z$
+- $U^T$ is lower triangular (since $U$ is upper triangular)
+- Uses forward substitution: $z_i = (b_i - \sum_{j=1}^{i-1} U_{ji}z_j) / U_{ii}$
+
+**Step 2b: Backward Solve**
+```{r eval=FALSE}
+backsolve(U, z)
+```
+- Solves $U\mu = z$ for $\mu$
+- $U$ is upper triangular
+- Uses backward substitution: $\mu_i = (z_i - \sum_{j=i+1}^{n} U_{ij}\mu_j) / U_{ii}$
+
+**Why this is efficient:**
+- Triangular solve is $O(n^2)$ vs $O(n^3)$ for matrix inversion
+- Exploits the structure without explicitly computing $Q^{-1}$
+
+### Line 3: Generate Random Noise
+```{r eval=FALSE}
+random_part <- backsolve(U, rnorm(length(linear_term)))
+```
+
+**What it does:**
+1. Generates standard normal draws: $Z \sim \mathcal{N}(0, I)$
+2. Solves $U Y = Z$ to get $Y = U^{-1}Z$
+
+**Why this works:**
+$$\text{Var}(Y) = \text{Var}(U^{-1}Z) = U^{-1} \text{Var}(Z)(U^{-1})^T = U^{-1}I(U^{-1})^T = (U^T U)^{-1} = Q^{-1}$$
+
+So $Y \sim \mathcal{N}(0, Q^{-1})$
+
+### Line 4: Combine and Return
+```{r eval=FALSE}
+as.numeric(posterior_mean + random_part)
+```
+
+**What it does:**
+- Adds the mean to the random component
+- `as.numeric()` ensures we return a vector (not a matrix)
+
+**Final result:**
+$$X = \mu + Y \sim \mathcal{N}(\mu, Q^{-1})$$
+
+## 3.3 Complete Example
+
+```{r}
+# Set up a 2D normal distribution
+Q <- matrix(c(4, 1, 1, 3), nrow = 2)  # Precision matrix
+b <- c(2, 3)  # Linear term
+
+# Draw a sample
+set.seed(123)
+sample <- rmvn_precision(Q, b)
+print(sample)
+
+# Verify with direct method
+Sigma <- solve(Q)
+mu <- Sigma %*% b
+set.seed(123)
+direct_sample <- MASS::mvrnorm(1, mu, Sigma)
+print(direct_sample)
+# Should be approximately equal
+```
+
+# 4. The Main MCMC Function - Detailed Code Walkthrough
+
+## 4.1 Data Preparation and Validation
+
+```{r eval=FALSE}
+run_spatial_mcmc <- function(
+    data,
+    response,
+    covariates,
+    coords,
+    n_iter = 10000,
+    burnin = 5000,
+    thin = 5,
+    cov_family = "exponential",
+    priors = list(
+      beta_mean = 0,
+      beta_var = 1000,
+      sigma2_shape = 2,
+      sigma2_rate = 1,
+      tau2_shape = 2,
+      tau2_rate = 1,
+      phi_shape = 2,
+      phi_rate = 1
+    ),
+    initial_values = list(
+      beta = NULL,
+      W = NULL,
+      sigma2 = 0.5,
+      tau2 = 0.2,
+      phi = 1
+    ),
+    phi_proposal_sd = 0.15,
+    progress_every = 100
+) {
+```
+
+### Extract and Prepare Data
+```{r eval=FALSE}
+  # Extract response variable as numeric vector
+  Y <- as.numeric(data[[response]])
+  
+  # Create design matrix from covariates
+  X <- model.matrix(
+    reformulate(covariates, response = NULL),
+    data = data
+  )
+  
+  # Ensure coordinates are in matrix format
+  coords <- as.matrix(coords)
+```
+
+**Explanation:**
+- `data[[response]]`: Extracts the response column using the column name
+- `as.numeric()`: Ensures the response is a numeric vector
+- `model.matrix()`: Creates the design matrix including an intercept (default)
+- `reformulate(covariates, response = NULL)`: Creates formula from character vector
+- `as.matrix()`: Converts coordinates to matrix (if they're a data frame)
+
+### Basic Parameter Extraction
+```{r eval=FALSE}
+  n <- length(Y)
+  p <- ncol(X)
+  
+  if (nrow(X) != n || nrow(coords) != n) {
+    stop("Y, X and coordinates must have the same number of rows.")
+  }
+```
+
+**Explanation:**
+- `n`: Number of observations
+- `p`: Number of regression coefficients (including intercept)
+- Validation ensures all inputs are consistent
+
+### Data Validation Checks
+```{r eval=FALSE}
+  if (!all(is.finite(Y))) {
+    stop("The response contains NA, NaN or Inf.")
+  }
+  
+  if (!all(is.finite(X))) {
+    stop("The design matrix contains NA, NaN or Inf.")
+  }
+  
+  if (!all(is.finite(coords))) {
+    stop("The coordinates contain NA, NaN or Inf.")
+  }
+```
+
+**Explanation:**
+- `is.finite()`: Checks for NA, NaN, and Inf values
+- `all()`: Ensures ALL values are finite
+- Prevents errors during matrix operations
+
+### Parameter Validation
+```{r eval=FALSE}
+  if (n_iter < 2 || burnin < 0 || burnin >= n_iter || thin < 1) {
+    stop("Require n_iter >= 2, 0 <= burnin < n_iter, and thin >= 1.")
+  }
+  
+  if (!is.finite(phi_proposal_sd) || phi_proposal_sd <= 0) {
+    stop("phi_proposal_sd must be positive and finite.")
+  }
+```
+
+**Explanation:**
+- Ensures MCMC settings are valid
+- `thin` must be at least 1 (no thinning if thin = 1)
+- `phi_proposal_sd` must be positive for a valid proposal distribution
+
+## 4.2 Coordinate Scaling and Distance Matrix
+
+```{r eval=FALSE}
+  # Standardising coordinates makes phi dimensionless
+  coords_scaled <- scale(coords)
+  coord_center <- attr(coords_scaled, "scaled:center")
+  coord_scale <- attr(coords_scaled, "scaled:scale")
+  distance_matrix <- as.matrix(dist(coords_scaled))
+```
+
+**Explanation:**
+- `scale()`: Standardizes coordinates to mean 0, variance 1
+  - This makes $\phi$ dimensionless and easier to interpret
+  - Improves numerical stability
+- `attr(coords_scaled, "scaled:center")`: Saves the centering values
+- `attr(coords_scaled, "scaled:scale")`: Saves the scaling values
+- `dist()`: Computes pairwise Euclidean distances
+- `as.matrix()`: Converts to full distance matrix
+
+**Why scale coordinates?**
+- Without scaling, $\phi$ would be in the units of the coordinates
+- Scaling makes $\phi$ a unitless parameter (easier to set priors)
+- Scaling information is stored for future predictions
+
+## 4.3 Correlation Matrix Function
+
+```{r eval=FALSE}
+  make_correlation <- function(phi) {
+    if (!is.finite(phi) || phi <= 0) {
+      stop("phi must be positive and finite.")
+    }
+    
+    if (cov_family == "exponential") {
+      R <- exp(-distance_matrix / phi)
+    } else if (cov_family == "matern") {
+      R <- geoR::matern(
+        distance_matrix,
+        phi = phi,
+        kappa = 1.5
+      )
+    } else {
+      stop("Use cov_family = 'exponential' or 'matern'.")
+    }
+    
+    # A tiny diagonal jitter protects Cholesky decompositions
+    R + diag(1e-8, n)
+  }
+```
+
+**Explanation:**
+- `make_correlation()`: Function closure that uses `distance_matrix` and `cov_family`
+- `phi` must be positive (spatial range parameter)
+
+**Exponential correlation:**
+```{r eval=FALSE}
+R <- exp(-distance_matrix / phi)
+```
+- Each element is the exponential of negative distance/phi
+- Correlation decays exponentially with distance
+
+**Matérn correlation:**
+```{r eval=FALSE}
+R <- geoR::matern(distance_matrix, phi = phi, kappa = 1.5)
+```
+- Uses the `geoR` package implementation
+- `kappa = 1.5` gives a specific smoothness
+- More flexible than exponential
+
+**Jitter:**
+```{r eval=FALSE}
+R + diag(1e-8, n)
+```
+- Adds tiny amount to diagonal
+- Prevents numerical issues with Cholesky decomposition
+- Small enough not to affect results (nugget effect is separate)
+
+## 4.4 Initial Values
+
+```{r eval=FALSE}
+  # Beta initial values
+  beta_current <- if (is.null(initial_values$beta)) {
+    as.numeric(qr.solve(X, Y))
+  } else {
+    as.numeric(initial_values$beta)
+  }
+  
+  if (length(beta_current) != p || !all(is.finite(beta_current))) {
+    stop("initial_values$beta must contain ", p, " finite values.")
+  }
+```
+
+**Explanation:**
+- `if (is.null(initial_values$beta))`: If user didn't provide initial values
+- `qr.solve(X, Y)`: Computes least squares estimate (OLS)
+  - Uses QR decomposition for numerical stability
+  - Good starting point for MCMC
+- `as.numeric()`: Ensures vector format
+- Validation checks length and finite values
+
+**W (spatial effects) initialization:**
+```{r eval=FALSE}
+  W_current <- if (is.null(initial_values$W)) {
+    rep(0, n)
+  } else {
+    as.numeric(initial_values$W)
+  }
+  
+  if (length(W_current) != n || !all(is.finite(W_current))) {
+    stop("initial_values$W must contain ", n, " finite values.")
+  }
+```
+
+**Explanation:**
+- Default to zeros for spatial effects
+- Zeros are a reasonable starting point (no spatial effect)
+
+**Variance parameters:**
+```{r eval=FALSE}
+  sigma2_current <- initial_values$sigma2
+  tau2_current <- initial_values$tau2
+  phi_current <- initial_values$phi
+  
+  positive_initials <- c(
+    sigma2 = sigma2_current,
+    tau2 = tau2_current,
+    phi = phi_current
+  )
+  
+  if (!all(is.finite(positive_initials)) || any(positive_initials <= 0)) {
+    stop("Initial sigma2, tau2 and phi must be positive and finite.")
+  }
+```
+
+**Explanation:**
+- All variance parameters must be positive
+- `any(positive_initials <= 0)`: Checks for non-positive values
+- Good initial values: sigma2 = 0.5, tau2 = 0.2, phi = 1
+
+**Prior setup:**
+```{r eval=FALSE}
+  beta_prior_mean <- rep(priors$beta_mean, p)
+  beta_prior_precision <- diag(1 / priors$beta_var, p)
+```
+
+**Explanation:**
+- `rep(priors$beta_mean, p)`: Creates vector of prior means
+- `diag(1 / priors$beta_var, p)`: Creates diagonal precision matrix
+  - Larger `beta_var` = smaller precision = weaker prior
+
+## 4.5 Storage Allocation
+
+```{r eval=FALSE}
+  # Allocate storage for all parameters
+  beta_chain <- matrix(NA_real_, nrow = n_iter, ncol = p)
+  W_chain <- matrix(NA_real_, nrow = n_iter, ncol = n)
+  sigma2_chain <- numeric(n_iter)
+  tau2_chain <- numeric(n_iter)
+  phi_chain <- numeric(n_iter)
+  log_likelihood_chain <- numeric(n_iter)
+  phi_accepted <- logical(n_iter)
+```
+
+**Explanation:**
+- `matrix(NA_real_, nrow, ncol)`: Pre-allocates matrices of NAs
+  - `NA_real_`: Specifically numeric NAs
+  - Pre-allocation is faster than growing vectors
+- `numeric(n_iter)`: Creates numeric vector of length n_iter
+- `logical(n_iter)`: Creates logical vector for acceptance tracking
+
+**Initial values stored:**
+```{r eval=FALSE}
+  beta_chain[1, ] <- beta_current
+  W_chain[1, ] <- W_current
+  sigma2_chain[1] <- sigma2_current
+  tau2_chain[1] <- tau2_current
+  phi_chain[1] <- phi_current
+```
+
+**Initial likelihood:**
+```{r eval=FALSE}
+  R_current <- make_correlation(phi_current)
+  Sigma_Y <- sigma2_current * R_current + tau2_current * diag(n)
+  
+  log_likelihood_chain[1] <- mvtnorm::dmvnorm(
+    Y,
+    mean = as.numeric(X %*% beta_current),
+    sigma = Sigma_Y,
+    log = TRUE
+  )
+```
+
+**Explanation:**
+- `Sigma_Y = sigma2*R + tau2*I`: Total covariance of Y
+- `dmvnorm()`: Multivariate normal density
+  - `log = TRUE`: Returns log-density (more stable)
+- Stored for convergence diagnostics
+
+## 4.6 MCMC Iterations - Complete Loop
+
+```{r eval=FALSE}
+  for (i in 2:n_iter) {
+    if (progress_every > 0 && i %% progress_every == 0) {
+      cat("Iteration:", i, "\n")
+    }
+```
+
+**Explanation:**
+- `for (i in 2:n_iter)`: Loop from 2 to n_iter
+- Progress indicator every `progress_every` iterations
+
+### 4.6.1 Update $\beta$
+
+```{r eval=FALSE}
+    # beta | Y, W, tau2
+    beta_precision <-
+      crossprod(X) / tau2_current + beta_prior_precision
+    
+    beta_linear_term <-
+      crossprod(X, Y - W_current) / tau2_current +
+      beta_prior_precision %*% beta_prior_mean
+    
+    beta_current <- rmvn_precision(
+      beta_precision,
+      beta_linear_term
+    )
+```
+
+**Detailed Explanation:**
+
+**`crossprod(X) / tau2_current`**
+- `crossprod(X) = X^T X`: Computes X transpose times X
+- `crossprod()` is more efficient than `t(X) %*% X`
+- Dividing by `tau2_current` scales by error variance
+
+**Prior contribution:**
+- `beta_prior_precision`: Diagonal matrix with 1/beta_var
+- `beta_prior_mean`: Vector of prior means
+
+**Linear term:**
+- `crossprod(X, Y - W_current)`: $X^T(Y - W)$
+- `crossprod(X, Y - W_current) / tau2_current`: Data contribution
+- `beta_prior_precision %*% beta_prior_mean`: Prior contribution
+
+**Sampling:**
+- `rmvn_precision()`: Draws from the full conditional
+
+### 4.6.2 Update $W$
+
+```{r eval=FALSE}
+    # W | Y, beta, sigma2, tau2, phi
+    R_current <- make_correlation(phi_current)
+    R_inverse <- chol2inv(chol(R_current))
+    
+    W_precision <-
+      diag(1 / tau2_current, n) + R_inverse / sigma2_current
+    
+    W_linear_term <-
+      as.numeric(Y - X %*% beta_current) / tau2_current
+    
+    W_current <- rmvn_precision(W_precision, W_linear_term)
+```
+
+**Detailed Explanation:**
+
+**Step 1: Compute correlation matrix**
+```{r eval=FALSE}
+R_current <- make_correlation(phi_current)
+```
+- Builds correlation matrix using current phi
+
+**Step 2: Invert correlation matrix**
+```{r eval=FALSE}
+R_inverse <- chol2inv(chol(R_current))
+```
+- `chol(R_current)`: Cholesky decomposition of R
+- `chol2inv()`: Computes inverse from Cholesky factor
+- More stable than `solve(R_current)`
+
+**Step 3: Build precision matrix**
+```{r eval=FALSE}
+W_precision <- diag(1 / tau2_current, n) + R_inverse / sigma2_current
+```
+- `diag(1 / tau2_current, n)`: Data precision (identity times 1/tau2)
+- `R_inverse / sigma2_current`: Spatial prior precision
+
+**Step 4: Build linear term**
+```{r eval=FALSE}
+W_linear_term <- as.numeric(Y - X %*% beta_current) / tau2_current
+```
+- `Y - X %*% beta_current`: Residuals after removing fixed effects
+- Divided by tau2 (data precision)
+
+**Step 5: Sample**
+```{r eval=FALSE}
+W_current <- rmvn_precision(W_precision, W_linear_term)
+```
+- Draw from full conditional
+
+### 4.6.3 Update $\sigma^2$
+
+```{r eval=FALSE}
+    # sigma2 | W, phi
+    sigma2_shape <- priors$sigma2_shape + n / 2
+    sigma2_rate <- priors$sigma2_rate +
+      0.5 * drop(crossprod(W_current, R_inverse %*% W_current))
+    
+    sigma2_current <- 1 / rgamma(
+      1,
+      shape = sigma2_shape,
+      rate = sigma2_rate
+    )
+```
+
+**Detailed Explanation:**
+
+**Shape parameter:**
+```{r eval=FALSE}
+sigma2_shape <- priors$sigma2_shape + n / 2
+```
+- Prior shape (2) + n/2
+
+**Rate parameter:**
+```{r eval=FALSE}
+sigma2_rate <- priors$sigma2_rate +
+  0.5 * drop(crossprod(W_current, R_inverse %*% W_current))
+```
+- `crossprod(W_current, R_inverse %*% W_current)`: $W^T R^{-1} W$
+- `drop()`: Removes dimensions from matrix (returns scalar)
+- Prior rate (1) + 0.5 * quadratic form
+
+**Sampling:**
+```{r eval=FALSE}
+sigma2_current <- 1 / rgamma(1, shape = sigma2_shape, rate = sigma2_rate)
+```
+- `rgamma()`: Samples from Gamma distribution
+- `1 / rgamma()`: Converts Gamma to Inverse-Gamma
+- Shape = sigma2_shape, Rate = sigma2_rate
+
+### 4.6.4 Update $\tau^2$
+
+```{r eval=FALSE}
+    # tau2 | Y, beta, W
+    residual <- as.numeric(Y - X %*% beta_current - W_current)
+    tau2_shape <- priors$tau2_shape + n / 2
+    tau2_rate <- priors$tau2_rate + 0.5 * sum(residual^2)
+    
+    tau2_current <- 1 / rgamma(
+      1,
+      shape = tau2_shape,
+      rate = tau2_rate
+    )
+```
+
+**Detailed Explanation:**
+
+**Compute residuals:**
+```{r eval=FALSE}
+residual <- as.numeric(Y - X %*% beta_current - W_current)
+```
+- Residuals after removing fixed and spatial effects
+
+**Shape parameter:**
+```{r eval=FALSE}
+tau2_shape <- priors$tau2_shape + n / 2
+```
+- Prior shape (2) + n/2
+
+**Rate parameter:**
+```{r eval=FALSE}
+tau2_rate <- priors$tau2_rate + 0.5 * sum(residual^2)
+```
+- `sum(residual^2)`: Sum of squared residuals
+- Prior rate (1) + 0.5 * SSR
+
+**Sampling:**
+```{r eval=FALSE}
+tau2_current <- 1 / rgamma(1, shape = tau2_shape, rate = tau2_rate)
+```
+- Inverse-Gamma sampling via Gamma
+
+### 4.6.5 Update $\phi$ - Metropolis-Hastings
+
+```{r eval=FALSE}
+    # phi | W, sigma2: random-walk MH on eta = log(phi)
+    eta_current <- log(phi_current)
+    eta_proposed <- rnorm(1, eta_current, phi_proposal_sd)
+    phi_proposed <- exp(eta_proposed)
+```
+
+**Detailed Explanation:**
+
+**Log transformation:**
+```{r eval=FALSE}
+eta_current <- log(phi_current)
+```
+- Transform phi to log scale
+
+**Propose new value:**
+```{r eval=FALSE}
+eta_proposed <- rnorm(1, eta_current, phi_proposal_sd)
+```
+- `rnorm(1, mean, sd)`: Draw one normal deviate
+- Symmetric proposal (random walk)
+
+**Back-transform:**
+```{r eval=FALSE}
+phi_proposed <- exp(eta_proposed)
+```
+- Transform back to original scale
+- Always positive!
+
+**Compute correlation matrices:**
+```{r eval=FALSE}
+R_proposed <- make_correlation(phi_proposed)
+```
+
+**Compute log-targets:**
+```{r eval=FALSE}
+    log_target_current <- 
+      mvtnorm::dmvnorm(
+        W_current,
+        mean = rep(0, n),
+        sigma = sigma2_current * R_current,
+        log = TRUE
+      ) +
+      dgamma(
+        phi_current,
+        shape = priors$phi_shape,
+        rate = priors$phi_rate,
+        log = TRUE
+      ) +
+      eta_current
+```
+
+**Detailed Explanation of Log-Target:**
+1. **Likelihood term**: `dmvnorm(W_current, ..., log = TRUE)`
+   - Evaluates $\log L(W|\phi)$
+   
+2. **Prior term**: `dgamma(phi_current, ..., log = TRUE)`
+   - Evaluates $\log \pi(\phi)$
+   
+3. **Jacobian term**: `eta_current = log(phi_current)`
+   - Accounts for log-transformation
+
+Same calculation for proposed value:
+```{r eval=FALSE}
+    log_target_proposed <- 
+      mvtnorm::dmvnorm(
+        W_current,
+        mean = rep(0, n),
+        sigma = sigma2_current * R_proposed,
+        log = TRUE
+      ) +
+      dgamma(
+        phi_proposed,
+        shape = priors$phi_shape,
+        rate = priors$phi_rate,
+        log = TRUE
+      ) +
+      eta_proposed
+```
+
+**Acceptance decision:**
+```{r eval=FALSE}
+    log_acceptance_ratio <- log_target_proposed - log_target_current
+    
+    if (
+      is.finite(log_acceptance_ratio) &&
+      log(runif(1)) < log_acceptance_ratio
+    ) {
+      phi_current <- phi_proposed
+      R_current <- R_proposed
+      phi_accepted[i] <- TRUE
+    }
+```
+
+**Detailed Explanation:**
+- `log_acceptance_ratio`: Difference in log-targets
+- `runif(1)`: Generate one uniform random number
+- `log(runif(1)) < log_acceptance_ratio`: Accept if log(u) < delta
+  - Equivalent to u < exp(delta)
+- On accept: update phi and correlation matrix
+- `phi_accepted[i] <- TRUE`: Track acceptance
+
+### 4.6.6 Compute and Store Log-Likelihood
+
+```{r eval=FALSE}
+    # Marginal likelihood Y | beta, sigma2, tau2, phi
+    Sigma_Y <- sigma2_current * R_current + tau2_current * diag(n)
+    
+    log_likelihood_current <- mvtnorm::dmvnorm(
+      Y,
+      mean = as.numeric(X %*% beta_current),
+      sigma = Sigma_Y,
+      log = TRUE
+    )
+```
+
+**Explanation:**
+- Total covariance: $\text{Var}(Y) = \sigma^2 R + \tau^2 I$
+- Evaluate multivariate normal density for Y
+- Used for model comparison and diagnostic
+
+### 4.6.7 Validate and Store
+
+```{r eval=FALSE}
+    current_values <- c(
+      beta_current,
+      W_current,
+      sigma2_current,
+      tau2_current,
+      phi_current,
+      log_likelihood_current
+    )
+    
+    if (!all(is.finite(current_values))) {
+      stop("A non-finite value was generated at iteration ", i, ".")
+    }
+    
+    beta_chain[i, ] <- beta_current
+    W_chain[i, ] <- W_current
+    sigma2_chain[i] <- sigma2_current
+    tau2_chain[i] <- tau2_current
+    phi_chain[i] <- phi_current
+    log_likelihood_chain[i] <- log_likelihood_current
+```
+
+**Explanation:**
+- Combine all values for validation
+- Check for finite values (prevents catastrophic failure)
+- Store all parameters in pre-allocated arrays
+
+## 4.7 Post-Processing: Burn-in and Thinning
+
+```{r eval=FALSE}
+  # 5.6 Burn-in and thinning
+  keep_idx <- seq(burnin + 1, n_iter, by = thin)
+  
+  mcmc_samples <- cbind(
+    beta_chain[keep_idx, , drop = FALSE],
+    sigma2 = sigma2_chain[keep_idx],
+    tau2 = tau2_chain[keep_idx],
+    phi = phi_chain[keep_idx],
+    log_lik = log_likelihood_chain[keep_idx]
+  )
+  
+  colnames(mcmc_samples)[seq_len(p)] <- paste0("beta_", 0:(p - 1))
+```
+
+**Detailed Explanation:**
+
+**Burn-in removal:**
+```{r eval=FALSE}
+keep_idx <- seq(burnin + 1, n_iter, by = thin)
+```
+- `seq(from, to, by)`: Creates sequence of indices
+- Starts after burn-in: `burnin + 1`
+- Skips iterations based on `thin`
+
+**Combine samples:**
+```{r eval=FALSE}
+mcmc_samples <- cbind(
+  beta_chain[keep_idx, , drop = FALSE],
+  sigma2 = sigma2_chain[keep_idx],
+  tau2 = tau2_chain[keep_idx],
+  phi = phi_chain[keep_idx],
+  log_lik = log_likelihood_chain[keep_idx]
+)
+```
+- `cbind()`: Column-bind all parameters
+- `drop = FALSE`: Prevents dropping to vector if p=1
+- Named columns for easier access
+
+**Name beta columns:**
+```{r eval=FALSE}
+colnames(mcmc_samples)[seq_len(p)] <- paste0("beta_", 0:(p - 1))
+```
+- Creates names like "beta_0", "beta_1", etc.
+- beta_0 is typically the intercept
+
+## 4.8 Validation and MCMC Object Creation
+
+```{r eval=FALSE}
+  if (!all(is.finite(mcmc_samples))) {
+    bad_values <- which(!is.finite(mcmc_samples), arr.ind = TRUE)
+    print(bad_values)
+    stop("Non-finite values were found in retained MCMC samples.")
+  }
+  
+  mcmc_object <- coda::mcmc(
+    mcmc_samples,
+    start = burnin + 1,
+    thin = thin
+  )
+```
+
+**Explanation:**
+- `which(!is.finite(mcmc_samples), arr.ind = TRUE)`: 
+  - Finds location of non-finite values
+  - `arr.ind = TRUE`: Returns row and column indices
+- `coda::mcmc()`: Creates coda MCMC object
+  - Compatible with coda diagnostic functions
+  - Start time and thinning information stored
+
+## 4.9 Return Results
+
+```{r eval=FALSE}
+  list(
+    samples = mcmc_object,
+    parameters = list(
+      beta = beta_chain[keep_idx, , drop = FALSE],
+      W = W_chain[keep_idx, , drop = FALSE],
+      sigma2 = sigma2_chain[keep_idx],
+      tau2 = tau2_chain[keep_idx],
+      phi = phi_chain[keep_idx],
+      log_likelihood = log_likelihood_chain[keep_idx]
+    ),
+    acceptance_rate = mean(phi_accepted[2:n_iter]),
+    kept_iterations = keep_idx,
+    coordinate_scaling = list(
+      center = coord_center,
+      scale = coord_scale
+    ),
+    settings = list(
+      n_iter = n_iter,
+      burnin = burnin,
+      thin = thin,
+      cov_family = cov_family,
+      phi_proposal_sd = phi_proposal_sd
+    )
+  )
+}
+```
+
+**Explanation of Return Structure:**
+
+**`samples`**: 
+- coda MCMC object for easy diagnostics
+- Use with `summary()`, `traceplot()`, `gelman.diag()`, etc.
+
+**`parameters`**:
+- Raw parameter matrices for custom analysis
+- `W` matrix: Each row is one MCMC draw of spatial effects
+
+**`acceptance_rate`**:
+- Proportion of accepted phi proposals
+- Target: 20-40%
+- Used for tuning `phi_proposal_sd`
+
+**`kept_iterations`**:
+- Indices of iterations after burn-in and thinning
+- Useful for time series analysis
+
+**`coordinate_scaling`**:
+- Saved for making predictions at new locations
+- New coordinates should be scaled using same center/scale
+
+**`settings`**:
+- Stores all MCMC settings for reproducibility
+
+# 5. Complete Mathematical Model Summary
+
+## Full Conditional Distributions:
+
+1. **$\beta \mid Y, W, \tau^2$**: 
+   $$\mathcal{MVN}\left(\left(\frac{X^TX}{\tau^2} + P_{\beta}\right)^{-1}\left(\frac{X^T(Y-W)}{\tau^2} + P_{\beta}\beta_{\text{prior}}\right), \left(\frac{X^TX}{\tau^2} + P_{\beta}\right)^{-1}\right)$$
+
+2. **$W \mid Y, \beta, \sigma^2, \tau^2, \phi$**: 
+   $$\mathcal{MVN}\left(\left(\frac{1}{\tau^2}I + \frac{R^{-1}}{\sigma^2}\right)^{-1}\left(\frac{Y-X\beta}{\tau^2}\right), \left(\frac{1}{\tau^2}I + \frac{R^{-1}}{\sigma^2}\right)^{-1}\right)$$
+
+3. **$\sigma^2 \mid W, \phi$**: 
+   $$\text{Inverse-Gamma}\left(\alpha_{\sigma} + \frac{n}{2}, \beta_{\sigma} + \frac{1}{2}W^T R^{-1} W\right)$$
+
+4. **$\tau^2 \mid Y, \beta, W$**: 
+   $$\text{Inverse-Gamma}\left(\alpha_{\tau} + \frac{n}{2}, \beta_{\tau} + \frac{1}{2}(Y-X\beta-W)^T(Y-X\beta-W)\right)$$
+
+5. **$\phi \mid W, \sigma^2$**: Metropolis-Hastings step on $\eta = \log(\phi)$
+
+# 6. Key Insights
+
+## The Precision-Addition Principle
+
+Throughout the MCMC algorithm, we see a recurring theme:
+
+$$\text{Posterior Precision} = \text{Data Precision} + \text{Prior Precision}$$
+
+This appears in:
+- **$\beta$ update**: $\frac{X^TX}{\tau^2} + P_{\beta}$
+- **$W$ update**: $\frac{1}{\tau^2}I + \frac{R^{-1}}{\sigma^2}$
+
+## Why This Matters
+
+1. **Numerical stability**: Working with precisions avoids inverting ill-conditioned matrices
+2. **Efficiency**: Precision matrices are often sparse in spatial models
+3. **Intuition**: Directly shows how data and prior combine
+
+## The Role of Spatial Parameters
+
+| Parameter | Meaning | Effect |
+|-----------|---------|--------|
+| $\sigma^2$ | Spatial variance | How much spatial variation exists |
+| $\tau^2$ | Error variance
+
